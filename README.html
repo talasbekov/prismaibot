@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Full Stack FastAPI Template</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --surface2: #16161f;
+    --border: #1e1e2e;
+    --accent: #7c3aed;
+    --accent2: #06b6d4;
+    --accent3: #10b981;
+    --text: #e2e2f0;
+    --muted: #6b6b8a;
+    --code-bg: #0d0d1a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      linear-gradient(rgba(124,58,237,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,58,237,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── HERO ── */
+  .hero {
+    padding: 8rem 0 5rem;
+    position: relative;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(124,58,237,0.1);
+    border: 1px solid rgba(124,58,237,0.3);
+    color: #a78bfa;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.4rem 1rem;
+    border-radius: 2px;
+    margin-bottom: 2rem;
+  }
+
+  .hero-badge::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    background: #7c3aed;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.8); }
+  }
+
+  h1 {
+    font-size: clamp(2.4rem, 6vw, 4.2rem);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin-bottom: 1.5rem;
+  }
+
+  h1 span {
+    background: linear-gradient(135deg, #a78bfa 0%, #06b6d4 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-desc {
+    font-size: 1.1rem;
+    color: var(--muted);
+    max-width: 640px;
+    line-height: 1.8;
+    font-weight: 400;
+  }
+
+  .hero-desc strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* ── SECTIONS ── */
+  section {
+    padding: 4rem 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 2.5rem;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: var(--accent2);
+  }
+
+  /* ── FILETREE ── */
+  .filetree {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1.5rem 2rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.82rem;
+    line-height: 2;
+    overflow-x: auto;
+  }
+
+  .filetree .dir { color: #a78bfa; }
+  .filetree .file { color: #94a3b8; }
+  .filetree .comment { color: #4a4a6a; }
+
+  /* ── TECH TABLES ── */
+  .tech-section { margin-bottom: 3rem; }
+
+  .tech-grid {
+    display: grid;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .tech-row {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    background: var(--surface);
+    transition: background 0.15s;
+  }
+
+  .tech-row:hover { background: var(--surface2); }
+
+  .tech-name {
+    padding: 0.75rem 1.2rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: #a78bfa;
+    border-right: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+  }
+
+  .tech-why {
+    padding: 0.75rem 1.2rem;
+    font-size: 0.88rem;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+  }
+
+  /* ── CODE BLOCKS ── */
+  .code-block {
+    margin: 1.5rem 0;
+  }
+
+  .code-header {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    padding: 0.5rem 1rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.7rem;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    border-radius: 4px 4px 0 0;
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 0 0 4px 4px;
+    padding: 1.2rem 1.5rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.82rem;
+    line-height: 1.9;
+    overflow-x: auto;
+    color: #c9d1d9;
+  }
+
+  pre .cmd { color: #7dd3fc; }
+  pre .cmt { color: #4a4a6a; }
+  pre .str { color: #86efac; }
+  pre .var { color: #fca5a5; }
+  pre .kw { color: #a78bfa; }
+
+  /* ── STEPS ── */
+  .steps { display: flex; flex-direction: column; gap: 2.5rem; }
+
+  .step {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  .step-num {
+    width: 56px;
+    height: 56px;
+    background: rgba(124,58,237,0.08);
+    border: 1px solid rgba(124,58,237,0.25);
+    border-radius: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #7c3aed;
+    flex-shrink: 0;
+  }
+
+  .step-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.6rem;
+    color: var(--text);
+  }
+
+  .step-desc {
+    font-size: 0.88rem;
+    color: var(--muted);
+    margin-bottom: 0.8rem;
+  }
+
+  /* ── SERVICES TABLE ── */
+  .services-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+  }
+
+  .services-table th {
+    text-align: left;
+    padding: 0.6rem 1rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .services-table td {
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid rgba(30,30,46,0.6);
+    vertical-align: middle;
+  }
+
+  .services-table tr:last-child td { border-bottom: none; }
+  .services-table tr:hover td { background: var(--surface2); }
+
+  .url-chip {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.78rem;
+    color: var(--accent2);
+    background: rgba(6,182,212,0.06);
+    border: 1px solid rgba(6,182,212,0.2);
+    padding: 0.2rem 0.6rem;
+    border-radius: 2px;
+  }
+
+  /* ── ENDPOINTS ── */
+  .endpoints { display: flex; flex-direction: column; gap: 0.4rem; }
+
+  .endpoint {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.8rem;
+    padding: 0.5rem 0.8rem;
+    border-radius: 2px;
+    transition: background 0.12s;
+  }
+
+  .endpoint:hover { background: var(--surface2); }
+
+  .method {
+    width: 52px;
+    text-align: center;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 0.15rem 0;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .method.get  { background: rgba(16,185,129,0.12); color: #10b981; border: 1px solid rgba(16,185,129,0.25); }
+  .method.post { background: rgba(124,58,237,0.12); color: #a78bfa; border: 1px solid rgba(124,58,237,0.25); }
+  .method.patch{ background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.25); }
+  .method.put  { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
+  .method.del  { background: rgba(239,68,68,0.12);  color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
+
+  .endpoint-path { color: var(--text); }
+  .endpoint-desc { color: var(--muted); margin-left: auto; font-size: 0.75rem; }
+
+  .endpoint-group {
+    margin-bottom: 1.5rem;
+  }
+
+  .endpoint-group-label {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0.4rem 0.8rem;
+    margin-bottom: 0.3rem;
+  }
+
+  /* ── FEATURES ── */
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .feature-card {
+    background: var(--surface);
+    padding: 1.2rem 1.4rem;
+    transition: background 0.15s;
+  }
+
+  .feature-card:hover { background: var(--surface2); }
+
+  .feature-icon {
+    font-size: 1.3rem;
+    margin-bottom: 0.6rem;
+    display: block;
+  }
+
+  .feature-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+  }
+
+  .feature-desc {
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  /* ── WHY SECTION ── */
+  .why-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .why-item {
+    background: var(--surface);
+    padding: 1.2rem 1.5rem;
+    display: flex;
+    gap: 1rem;
+    align-items: start;
+    transition: background 0.15s;
+  }
+
+  .why-item:hover { background: var(--surface2); }
+
+  .why-num {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.7rem;
+    color: var(--accent);
+    font-weight: 700;
+    flex-shrink: 0;
+    padding-top: 0.15rem;
+  }
+
+  .why-text { font-size: 0.88rem; color: var(--text); font-weight: 500; }
+  .why-sub { font-size: 0.78rem; color: var(--muted); margin-top: 0.2rem; }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* ── FADE IN ── */
+  .fade-in {
+    opacity: 0;
+    transform: translateY(16px);
+    animation: fadeIn 0.5s ease forwards;
+  }
+
+  @keyframes fadeIn {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  section { animation: fadeIn 0.5s ease forwards; }
+
+  @media (max-width: 640px) {
+    .why-grid { grid-template-columns: 1fr; }
+    .tech-row { grid-template-columns: 1fr; }
+    .tech-name { border-right: none; border-bottom: 1px solid var(--border); }
+    .step { grid-template-columns: 40px 1fr; }
+    .endpoint-desc { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="container">
+    <div class="hero-badge">production-ready template</div>
+    <h1>Full Stack<br><span>FastAPI Template</span></h1>
+    <p class="hero-desc">
+      Архитектурная основа для <strong>современных веб-приложений</strong> от Sebastián Ramírez — 
+      создателя FastAPI. Не просто болванка, а полноценный стек с продуманной безопасностью, 
+      масштабируемостью и developer experience из коробки.
+    </p>
+  </div>
+</div>
+
+<!-- АРХИТЕКТУРА -->
+<section>
+  <div class="container">
+    <div class="section-label">// structure</div>
+    <h2>Архитектура проекта</h2>
+    <div class="filetree">
+<span class="dir">full-stack-fastapi-template/</span>
+├── <span class="dir">backend/</span>              <span class="comment"># Python + FastAPI</span>
+│   ├── <span class="dir">app/</span>
+│   │   ├── <span class="dir">api/</span>
+│   │   │   ├── <span class="dir">routes/</span>   <span class="comment"># login, users, items, utils</span>
+│   │   │   ├── <span class="file">deps.py</span>   <span class="comment"># Dependency Injection</span>
+│   │   │   └── <span class="file">main.py</span>   <span class="comment"># Роутер-агрегатор</span>
+│   │   ├── <span class="dir">core/</span>
+│   │   │   ├── <span class="file">config.py</span>    <span class="comment"># Pydantic Settings</span>
+│   │   │   ├── <span class="file">db.py</span>        <span class="comment"># SQLAlchemy Engine</span>
+│   │   │   └── <span class="file">security.py</span>  <span class="comment"># JWT + Argon2/Bcrypt</span>
+│   │   ├── <span class="file">models.py</span>        <span class="comment"># SQLModel (ORM + Schemas)</span>
+│   │   ├── <span class="file">crud.py</span>          <span class="comment"># Database operations</span>
+│   │   └── <span class="file">main.py</span>          <span class="comment"># FastAPI app + CORS + Sentry</span>
+│   ├── <span class="dir">alembic/</span>             <span class="comment"># Миграции БД</span>
+│   ├── <span class="dir">tests/</span>               <span class="comment"># Pytest</span>
+│   └── <span class="file">pyproject.toml</span>       <span class="comment"># Зависимости (uv)</span>
+│
+├── <span class="dir">frontend/</span>             <span class="comment"># React + TypeScript</span>
+│   ├── <span class="dir">src/</span>
+│   │   ├── <span class="dir">routes/</span>       <span class="comment"># File-based routing (TanStack)</span>
+│   │   ├── <span class="dir">client/</span>       <span class="comment"># Auto-generated OpenAPI client</span>
+│   │   ├── <span class="dir">components/</span>   <span class="comment"># shadcn/ui компоненты</span>
+│   │   └── <span class="dir">hooks/</span>        <span class="comment"># Custom React hooks</span>
+│   ├── <span class="dir">tests/</span>            <span class="comment"># Playwright E2E</span>
+│   └── <span class="file">package.json</span>      <span class="comment"># Зависимости (Bun)</span>
+│
+├── <span class="file">compose.yml</span>           <span class="comment"># Production Docker Compose</span>
+├── <span class="file">compose.override.yml</span>  <span class="comment"># Dev: hot-reload, mailcatcher</span>
+├── <span class="file">compose.traefik.yml</span>   <span class="comment"># Reverse proxy + SSL</span>
+└── <span class="file">.env</span>                  <span class="comment"># Конфигурация окружения</span>
+    </div>
+  </div>
+</section>
+
+<!-- ТЕХНОЛОГИИ -->
+<section>
+  <div class="container">
+    <div class="section-label">// tech stack</div>
+    <h2>Полный стек технологий</h2>
+
+    <div class="tech-section">
+      <h3>⚡ Backend</h3>
+      <div class="tech-grid">
+        <div class="tech-row"><div class="tech-name">FastAPI</div><div class="tech-why">Быстрее Django в 2–5x. Встроенный OpenAPI/Swagger. Async из коробки. Автодокументация.</div></div>
+        <div class="tech-row"><div class="tech-name">SQLModel</div><div class="tech-why">Создан автором FastAPI. Объединяет SQLAlchemy + Pydantic — нет дублирования кода моделей.</div></div>
+        <div class="tech-row"><div class="tech-name">PostgreSQL</div><div class="tech-why">Full ACID, JSON, отличная масштабируемость. Самая надёжная production СУБД.</div></div>
+        <div class="tech-row"><div class="tech-name">Alembic</div><div class="tech-why">Де-факто стандарт для миграций SQLAlchemy. Автогенерация из моделей.</div></div>
+        <div class="tech-row"><div class="tech-name">PyJWT + OAuth2</div><div class="tech-why">Stateless аутентификация. JWT с 8-дневным TTL. Полная совместимость с OAuth2.</div></div>
+        <div class="tech-row"><div class="tech-name">Argon2 (pwdlib)</div><div class="tech-why">Победитель Password Hashing Competition 2015. Защищён от GPU-атак. Лучше bcrypt.</div></div>
+        <div class="tech-row"><div class="tech-name">Pydantic v2</div><div class="tech-why">Написан на Rust. В 5–50x быстрее Pydantic v1. Строгая валидация данных.</div></div>
+        <div class="tech-row"><div class="tech-name">uv</div><div class="tech-why">Python package manager на Rust. В 10–100x быстрее pip. От авторов ruff.</div></div>
+        <div class="tech-row"><div class="tech-name">Ruff + mypy</div><div class="tech-why">Ruff заменяет flake8+isort+black. mypy в строгом режиме — полная типобезопасность.</div></div>
+        <div class="tech-row"><div class="tech-name">Sentry SDK</div><div class="tech-why">Production мониторинг ошибок. Трекинг производительности.</div></div>
+      </div>
+    </div>
+
+    <div class="tech-section">
+      <h3>🎨 Frontend</h3>
+      <div class="tech-grid">
+        <div class="tech-row"><div class="tech-name">React 19</div><div class="tech-why">Новый компилятор, лучший concurrent rendering. Самая популярная UI-библиотека.</div></div>
+        <div class="tech-row"><div class="tech-name">TypeScript 5.9</div><div class="tech-why">Статическая типизация = меньше ошибок в runtime. Идеально с auto-generated клиентом.</div></div>
+        <div class="tech-row"><div class="tech-name">Vite</div><div class="tech-why">Старт dev-сервера &lt;300ms. Мгновенный HMR. В 10–20x быстрее webpack.</div></div>
+        <div class="tech-row"><div class="tech-name">TanStack Router</div><div class="tech-why">File-based routing с полной типобезопасностью. Автоматический code-splitting.</div></div>
+        <div class="tech-row"><div class="tech-name">TanStack Query</div><div class="tech-why">Умный кеш. Автоинвалидация. Loading/error states. Optimistic updates из коробки.</div></div>
+        <div class="tech-row"><div class="tech-name">shadcn/ui</div><div class="tech-why">Компоненты которыми ты владеешь. Radix UI (доступность) + Tailwind.</div></div>
+        <div class="tech-row"><div class="tech-name">Tailwind CSS 4</div><div class="tech-why">Нативные CSS cascade layers. Нет runtime. Utility-first подход.</div></div>
+        <div class="tech-row"><div class="tech-name">Zod + RHF</div><div class="tech-why">TypeScript-first валидация. Перформанс-ориентированные формы без лишних ре-рендеров.</div></div>
+        <div class="tech-row"><div class="tech-name">Biome</div><div class="tech-why">Rust-based замена ESLint + Prettier. В 15–25x быстрее.</div></div>
+        <div class="tech-row"><div class="tech-name">Playwright</div><div class="tech-why">E2E тесты от Microsoft. Кросс-браузерный. Параллельный запуск.</div></div>
+        <div class="tech-row"><div class="tech-name">Bun</div><div class="tech-why">JavaScript runtime на Zig. В 3–5x быстрее npm/yarn.</div></div>
+        <div class="tech-row"><div class="tech-name">@hey-api/openapi-ts</div><div class="tech-why">Автогенерация TypeScript клиента из OpenAPI схемы. Ноль ручных API-запросов.</div></div>
+      </div>
+    </div>
+
+    <div class="tech-section">
+      <h3>🚀 DevOps</h3>
+      <div class="tech-grid">
+        <div class="tech-row"><div class="tech-name">Docker + Compose</div><div class="tech-why">Изолированные окружения. Воспроизводимые сборки. Dev/prod паритет.</div></div>
+        <div class="tech-row"><div class="tech-name">Traefik 3</div><div class="tech-why">Автоматический SSL от Let's Encrypt. Динамический конфиг. Docker-native.</div></div>
+        <div class="tech-row"><div class="tech-name">GitHub Actions</div><div class="tech-why">CI/CD прямо в репозитории. Параллельный запуск тестов. Deploy в staging/production.</div></div>
+        <div class="tech-row"><div class="tech-name">Adminer</div><div class="tech-why">Лёгкий веб-интерфейс для PostgreSQL. Один контейнер, удобная инспекция БД.</div></div>
+        <div class="tech-row"><div class="tech-name">Mailcatcher</div><div class="tech-why">Перехватывает все email в dev-режиме. Веб-интерфейс для просмотра писем.</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ЧТО РЕАЛИЗОВАНО -->
+<section>
+  <div class="container">
+    <div class="section-label">// features</div>
+    <h2>Что уже реализовано</h2>
+    <div class="features-grid">
+      <div class="feature-card"><span class="feature-icon">🔐</span><div class="feature-title">Полная аутентификация</div><div class="feature-desc">JWT, OAuth2, cookie. Регистрация + верификация email.</div></div>
+      <div class="feature-card"><span class="feature-icon">🔑</span><div class="feature-title">Сброс пароля</div><div class="feature-desc">Email с HTML шаблонами. Secure token flow.</div></div>
+      <div class="feature-card"><span class="feature-icon">👥</span><div class="feature-title">CRUD Users & Items</div><div class="feature-desc">Готовые роуты как паттерн для расширения.</div></div>
+      <div class="feature-card"><span class="feature-icon">🛡️</span><div class="feature-title">Роли доступа</div><div class="feature-desc">Superuser vs обычный пользователь. Admin панель.</div></div>
+      <div class="feature-card"><span class="feature-icon">🌙</span><div class="feature-title">Тёмная тема</div><div class="feature-desc">Из коробки, без дополнительной настройки.</div></div>
+      <div class="feature-card"><span class="feature-icon">⚡</span><div class="feature-title">Auto-generated API client</div><div class="feature-desc">Никакого ручного написания fetch/axios запросов.</div></div>
+      <div class="feature-card"><span class="feature-icon">📄</span><div class="feature-title">Пагинация</div><div class="feature-desc">Готовая пагинация для всех списков.</div></div>
+      <div class="feature-card"><span class="feature-icon">🧪</span><div class="feature-title">Полное тестирование</div><div class="feature-desc">pytest backend + Playwright E2E frontend.</div></div>
+      <div class="feature-card"><span class="feature-icon">🔄</span><div class="feature-title">CI/CD</div><div class="feature-desc">GitHub Actions пайплайны для staging и production.</div></div>
+      <div class="feature-card"><span class="feature-icon">🌐</span><div class="feature-title">Production deploy</div><div class="feature-desc">Traefik + SSL + Sentry + health checks.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ЗАПУСК -->
+<section>
+  <div class="container">
+    <div class="section-label">// getting started</div>
+    <h2>Пошаговая инструкция</h2>
+
+    <div class="steps">
+
+      <!-- Шаг 0 -->
+      <div class="step">
+        <div class="step-num">00</div>
+        <div>
+          <div class="step-title">Предварительные требования</div>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">docker</span> --version        <span class="cmt"># >= 24.x</span>
+<span class="cmd">docker compose</span> version  <span class="cmt"># >= 2.x</span>
+<span class="cmd">git</span> --version</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Шаг 1 -->
+      <div class="step">
+        <div class="step-num">01</div>
+        <div>
+          <div class="step-title">Клонирование и настройка</div>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">cd</span> /home/erda/Загрузки/full-stack-fastapi-template-master
+<span class="cmd">cat</span> .env</pre>
+          </div>
+          <div class="step-desc">Открой <code style="color:#a78bfa;font-family:'JetBrains Mono',monospace;font-size:0.8rem">.env</code> и измени критичные значения:</div>
+          <div class="code-block">
+            <div class="code-header">.env</div>
+            <pre><span class="cmt"># ОБЯЗАТЕЛЬНО измени:</span>
+<span class="var">SECRET_KEY</span>=<span class="str">&lt;сгенерируй_случайную_строку&gt;</span>
+<span class="var">FIRST_SUPERUSER</span>=<span class="str">admin@yourdomain.com</span>
+<span class="var">FIRST_SUPERUSER_PASSWORD</span>=<span class="str">&lt;надёжный_пароль&gt;</span>
+<span class="var">POSTGRES_PASSWORD</span>=<span class="str">&lt;надёжный_пароль&gt;</span>
+
+<span class="cmt"># Для локальной разработки оставь как есть:</span>
+<span class="var">DOMAIN</span>=<span class="str">localhost</span>
+<span class="var">ENVIRONMENT</span>=<span class="str">local</span></pre>
+          </div>
+          <div class="step-desc">Генерация SECRET_KEY:</div>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">python3</span> -c <span class="str">"import secrets; print(secrets.token_urlsafe(32))"</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Шаг 2 -->
+      <div class="step">
+        <div class="step-num">02</div>
+        <div>
+          <div class="step-title">Запуск через Docker Compose</div>
+          <div class="step-desc">Рекомендуемый способ — dev-режим с hot-reload:</div>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">docker compose</span> watch
+<span class="cmt"># или классически:</span>
+<span class="cmd">docker compose</span> up -d</pre>
+          </div>
+          <div class="step-desc" style="margin-top:1rem;margin-bottom:0.8rem">Доступные сервисы после запуска:</div>
+          <table class="services-table">
+            <thead>
+              <tr><th>Сервис</th><th>URL</th><th>Описание</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Frontend (React)</td><td><span class="url-chip">:5173</span></td><td>Vite dev server</td></tr>
+              <tr><td>Backend (FastAPI)</td><td><span class="url-chip">:8000</span></td><td>API с hot-reload</td></tr>
+              <tr><td>Swagger UI</td><td><span class="url-chip">:8000/docs</span></td><td>Интерактивная документация</td></tr>
+              <tr><td>Redoc</td><td><span class="url-chip">:8000/redoc</span></td><td>Альтернативная документация</td></tr>
+              <tr><td>Adminer</td><td><span class="url-chip">:8080</span></td><td>Управление PostgreSQL</td></tr>
+              <tr><td>Traefik</td><td><span class="url-chip">:8090</span></td><td>Reverse proxy dashboard</td></tr>
+              <tr><td>Mailcatcher</td><td><span class="url-chip">:1080</span></td><td>Перехват email</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Шаг 3 -->
+      <div class="step">
+        <div class="step-num">03</div>
+        <div>
+          <div class="step-title">Первый вход</div>
+          <div class="step-desc">Открой <span class="url-chip">http://localhost:5173</span> → Log In → введи данные из <code style="color:#a78bfa;font-family:'JetBrains Mono',monospace;font-size:0.8rem">.env</code>: значения <code style="color:#fca5a5;font-family:'JetBrains Mono',monospace;font-size:0.8rem">FIRST_SUPERUSER</code> и <code style="color:#fca5a5;font-family:'JetBrains Mono',monospace;font-size:0.8rem">FIRST_SUPERUSER_PASSWORD</code>.</div>
+        </div>
+      </div>
+
+      <!-- Шаг 4 -->
+      <div class="step">
+        <div class="step-num">04</div>
+        <div>
+          <div class="step-title">Локальный запуск без Docker</div>
+          <h3 style="margin-top:0.5rem">Backend (Python 3.10+)</h3>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">curl</span> -LsSf https://astral.sh/uv/install.sh | sh
+<span class="cmd">cd</span> backend && <span class="cmd">uv</span> sync
+<span class="cmd">docker compose</span> up db -d          <span class="cmt"># только PostgreSQL</span>
+<span class="cmd">uv run</span> alembic upgrade head
+<span class="cmd">uv run</span> python app/initial_data.py
+<span class="cmd">uv run</span> fastapi dev app/main.py</pre>
+          </div>
+          <h3>Frontend (Bun)</h3>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">curl</span> -fsSL https://bun.sh/install | bash
+<span class="cmd">cd</span> frontend && <span class="cmd">bun</span> install && <span class="cmd">bun</span> dev</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Шаг 5 -->
+      <div class="step">
+        <div class="step-num">05</div>
+        <div>
+          <div class="step-title">Генерация API клиента</div>
+          <div class="step-desc">После добавления новых эндпоинтов — обнови TypeScript клиент:</div>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">bash</span> scripts/generate-client.sh</pre>
+          </div>
+          <div class="step-desc">Читает OpenAPI схему с <span class="url-chip">:8000/api/v1/openapi.json</span> и генерирует типы в <code style="color:#a78bfa;font-family:'JetBrains Mono',monospace;font-size:0.8rem">frontend/src/client/</code></div>
+        </div>
+      </div>
+
+      <!-- Шаг 6 -->
+      <div class="step">
+        <div class="step-num">06</div>
+        <div>
+          <div class="step-title">Запуск тестов</div>
+          <h3 style="margin-top:0.5rem">Backend (pytest)</h3>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">cd</span> backend
+<span class="cmd">uv run</span> pytest
+<span class="cmd">uv run</span> pytest --cov=app --cov-report=html
+<span class="cmd">uv run</span> pytest tests/api/test_users.py -v</pre>
+          </div>
+          <h3>Frontend E2E (Playwright)</h3>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">cd</span> frontend
+<span class="cmd">bunx</span> playwright install
+<span class="cmd">bunx</span> playwright test
+<span class="cmd">bunx</span> playwright test --ui
+<span class="cmd">bunx</span> playwright test --headed</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Шаг 7 -->
+      <div class="step">
+        <div class="step-num">07</div>
+        <div>
+          <div class="step-title">Миграции БД</div>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="cmd">cd</span> backend
+<span class="cmd">uv run</span> alembic revision --autogenerate -m <span class="str">"Add new field to User"</span>
+<span class="cmd">uv run</span> alembic upgrade head
+<span class="cmd">uv run</span> alembic downgrade -1   <span class="cmt"># откатить на шаг</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Шаг 8 -->
+      <div class="step">
+        <div class="step-num">08</div>
+        <div>
+          <div class="step-title">Работа с API</div>
+          <div class="step-desc">Swagger UI — <span class="url-chip">http://localhost:8000/docs</span></div>
+          <div class="endpoints" style="margin-top:1rem">
+            <div class="endpoint-group">
+              <div class="endpoint-group-label">Auth</div>
+              <div class="endpoint"><span class="method post">POST</span><span class="endpoint-path">/api/v1/login/access-token</span><span class="endpoint-desc">Получить JWT токен</span></div>
+              <div class="endpoint"><span class="method post">POST</span><span class="endpoint-path">/api/v1/login/test-token</span><span class="endpoint-desc">Проверить токен</span></div>
+              <div class="endpoint"><span class="method post">POST</span><span class="endpoint-path">/api/v1/users/signup</span><span class="endpoint-desc">Регистрация</span></div>
+              <div class="endpoint"><span class="method post">POST</span><span class="endpoint-path">/api/v1/password-recovery/{email}</span><span class="endpoint-desc">Сброс пароля</span></div>
+            </div>
+            <div class="endpoint-group">
+              <div class="endpoint-group-label">Users</div>
+              <div class="endpoint"><span class="method get">GET</span><span class="endpoint-path">/api/v1/users/me</span><span class="endpoint-desc">Текущий пользователь</span></div>
+              <div class="endpoint"><span class="method patch">PATCH</span><span class="endpoint-path">/api/v1/users/me</span><span class="endpoint-desc">Обновить профиль</span></div>
+              <div class="endpoint"><span class="method patch">PATCH</span><span class="endpoint-path">/api/v1/users/me/password</span><span class="endpoint-desc">Сменить пароль</span></div>
+            </div>
+            <div class="endpoint-group">
+              <div class="endpoint-group-label">Items</div>
+              <div class="endpoint"><span class="method get">GET</span><span class="endpoint-path">/api/v1/items/</span><span class="endpoint-desc">Список items</span></div>
+              <div class="endpoint"><span class="method post">POST</span><span class="endpoint-path">/api/v1/items/</span><span class="endpoint-desc">Создать item</span></div>
+              <div class="endpoint"><span class="method put">PUT</span><span class="endpoint-path">/api/v1/items/{id}</span><span class="endpoint-desc">Обновить item</span></div>
+              <div class="endpoint"><span class="method del">DEL</span><span class="endpoint-path">/api/v1/items/{id}</span><span class="endpoint-desc">Удалить item</span></div>
+            </div>
+            <div class="endpoint-group">
+              <div class="endpoint-group-label">Admin</div>
+              <div class="endpoint"><span class="method get">GET</span><span class="endpoint-path">/api/v1/users/</span><span class="endpoint-desc">Все пользователи</span></div>
+              <div class="endpoint"><span class="method post">POST</span><span class="endpoint-path">/api/v1/users/</span><span class="endpoint-desc">Создать пользователя</span></div>
+              <div class="endpoint"><span class="method del">DEL</span><span class="endpoint-path">/api/v1/users/{id}</span><span class="endpoint-desc">Удалить пользователя</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Шаг 9 -->
+      <div class="step">
+        <div class="step-num">09</div>
+        <div>
+          <div class="step-title">Добавление своей фичи</div>
+          <div class="step-desc">Полный цикл на примере модели Product:</div>
+          <div class="code-block">
+            <div class="code-header">backend/app/models.py</div>
+            <pre><span class="kw">class</span> Product(SQLModel, table=<span class="kw">True</span>):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=<span class="kw">True</span>)
+    name: str = Field(max_length=<span class="str">255</span>)
+    price: float
+    owner_id: uuid.UUID = Field(foreign_key=<span class="str">"user.id"</span>)</pre>
+          </div>
+          <div class="code-block">
+            <div class="code-header">backend/app/api/routes/products.py</div>
+            <pre><span class="kw">from</span> fastapi <span class="kw">import</span> APIRouter
+<span class="kw">from</span> app.api.deps <span class="kw">import</span> CurrentUser, SessionDep
+
+router = APIRouter(prefix=<span class="str">"/products"</span>, tags=[<span class="str">"products"</span>])
+
+<span class="kw">@router</span>.get(<span class="str">"/"</span>)
+<span class="kw">def</span> get_products(session: SessionDep, current_user: CurrentUser):
+    ...</pre>
+          </div>
+          <div class="code-block">
+            <div class="code-header">Миграция и обновление клиента</div>
+            <pre><span class="cmd">uv run</span> alembic revision --autogenerate -m <span class="str">"Add Product"</span>
+<span class="cmd">uv run</span> alembic upgrade head
+<span class="cmd">bash</span> scripts/generate-client.sh</pre>
+          </div>
+          <div class="code-block">
+            <div class="code-header">React компонент</div>
+            <pre><span class="kw">import</span> { ProductsService } <span class="kw">from</span> <span class="str">"@/client"</span>
+
+<span class="cmt">// TanStack Query автоматически кеширует</span>
+<span class="kw">const</span> { data } = useQuery({
+  queryKey: [<span class="str">"products"</span>],
+  queryFn: () => ProductsService.getProducts()
+})</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Шаг 10 -->
+      <div class="step">
+        <div class="step-num">10</div>
+        <div>
+          <div class="step-title">Production деплой</div>
+          <div class="code-block">
+            <div class="code-header">bash</div>
+            <pre><span class="var">DOMAIN</span>=<span class="str">yourdomain.com</span>
+<span class="cmd">docker compose</span> -f compose.yml -f compose.traefik.yml up -d</pre>
+          </div>
+          <div class="step-desc">Traefik автоматически получает SSL сертификат от Let's Encrypt.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ПОЧЕМУ КРУТОЙ -->
+<section>
+  <div class="container">
+    <div class="section-label">// why this template</div>
+    <h2>Почему это крутой шаблон</h2>
+    <div class="why-grid">
+      <div class="why-item"><div class="why-num">01</div><div><div class="why-text">Нулевой бойлерплейт</div><div class="why-sub">Всё что нужно для старта уже написано</div></div></div>
+      <div class="why-item"><div class="why-num">02</div><div><div class="why-text">Type-safe от базы до UI</div><div class="why-sub">Ошибки ловятся на этапе компиляции, не в runtime</div></div></div>
+      <div class="why-item"><div class="why-num">03</div><div><div class="why-text">Auto-generated API client</div><div class="why-sub">Никакого ручного написания HTTP-запросов</div></div></div>
+      <div class="why-item"><div class="why-num">04</div><div><div class="why-text">Hot-reload везде</div><div class="why-sub">Backend и frontend перезагружаются мгновенно</div></div></div>
+      <div class="why-item"><div class="why-num">05</div><div><div class="why-text">Безопасность по умолчанию</div><div class="why-sub">Argon2, JWT, CORS, timing-attack protection</div></div></div>
+      <div class="why-item"><div class="why-num">06</div><div><div class="why-text">Production-ready из коробки</div><div class="why-sub">Traefik + SSL + Sentry + health checks</div></div></div>
+      <div class="why-item"><div class="why-num">07</div><div><div class="why-text">Полное тестирование</div><div class="why-sub">Unit + integration + E2E уже настроены</div></div></div>
+      <div class="why-item"><div class="why-num">08</div><div><div class="why-text">CI/CD включён</div><div class="why-sub">GitHub Actions для staging и production</div></div></div>
+      <div class="why-item"><div class="why-num">09</div><div><div class="why-text">Скорость разработки</div><div class="why-sub">uv + Bun + Vite = самые быстрые инструменты</div></div></div>
+      <div class="why-item"><div class="why-num">10</div><div><div class="why-text">Официальный шаблон</div><div class="why-sub">Поддерживается создателем FastAPI</div></div></div>
+    </div>
+  </div>
+</section>
+
+<div style="height:4rem"></div>
+
+</body>
+</html>
