@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, delete, select
 
 from app.conversation.first_response import FirstTrustResponse
-from app.conversation.session_bootstrap import handle_session_entry
+from app.conversation.session_bootstrap import OPENING_PROMPT, handle_session_entry
 from app.models import (
     OperatorAlert,
     OperatorInvestigation,
@@ -39,7 +39,9 @@ def clear_telegram_sessions(db: Session) -> None:
     db.commit()
 
 
-def test_start_returns_opening_prompt_with_typing_signal(client: TestClient) -> None:
+def test_start_autostarts_brainstorming_with_typing_signal(
+    client: TestClient, db: Session
+) -> None:
     response = client.post(
         "/api/v1/telegram/webhook",
         json={
@@ -55,10 +57,21 @@ def test_start_returns_opening_prompt_with_typing_signal(client: TestClient) -> 
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["action"] == "opening_prompt"
+    assert payload["action"] == "brainstorm_autostart"
     assert payload["signals"] == ["typing"]
-    assert len(payload["messages"]) == 1
-    assert payload["session_id"] is None
+    assert len(payload["messages"]) == 2
+    assert payload["messages"][0]["text"] == OPENING_PROMPT
+    assert "Опиши задачу или проблему" in payload["messages"][1]["text"]
+    assert payload["session_id"] is not None
+
+    session = db.exec(
+        select(TelegramSession).where(TelegramSession.telegram_user_id == 1001)
+    ).one()
+    assert session.chat_id == 2001
+    assert session.brainstorm_phase == "collect_topic"
+    assert session.brainstorm_data is not None
+    assert session.brainstorm_data["ideas"] == []
+    assert payload["inline_keyboard"] == []
 
 
 def test_first_message_creates_session_tied_to_telegram_user_id(
@@ -1882,7 +1895,7 @@ def test_work_context_is_not_treated_as_off_topic(
     assert "работе" in payload["messages"][0]["text"]
 
 
-def test_opening_prompt_includes_mode_selection_buttons(client: TestClient) -> None:
+def test_start_does_not_include_mode_selection_buttons(client: TestClient) -> None:
     response = client.post(
         "/api/v1/telegram/webhook",
         json={
@@ -1897,11 +1910,8 @@ def test_opening_prompt_includes_mode_selection_buttons(client: TestClient) -> N
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["action"] == "opening_prompt"
-    assert len(payload["inline_keyboard"]) == 1
-    callback_datas = [btn["callback_data"] for btn in payload["inline_keyboard"][0]]
-    assert "brainstorm:mode:reflect" in callback_datas
-    assert "brainstorm:mode:brainstorm" in callback_datas
+    assert payload["action"] == "brainstorm_autostart"
+    assert payload["inline_keyboard"] == []
 
 
 def test_mode_selection_fast_via_callback(client: TestClient, db: Session) -> None:

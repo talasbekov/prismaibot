@@ -3,12 +3,8 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete
+from sqlmodel import Session, delete, select
 
-from app.conversation.session_bootstrap import (
-    OPENING_PROMPT,
-    RETURNING_USER_OPENING_PROMPT,
-)
 from app.models import (
     DeletionRequest,
     OperatorAlert,
@@ -35,7 +31,7 @@ def clear_db(db: Session) -> None:
     db.execute(delete(TelegramSession))
     db.commit()
 
-def test_new_user_gets_generic_opening(client: TestClient) -> None:
+def test_new_user_start_autostarts_brainstorming(client: TestClient, db: Session) -> None:
     response = client.post(
         "/api/v1/telegram/webhook",
         json={
@@ -50,16 +46,20 @@ def test_new_user_gets_generic_opening(client: TestClient) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["action"] == "opening_prompt"
-    
-    # New user gets OPENING_PROMPT
-    expected_text = OPENING_PROMPT
-    assert payload["messages"][0]["text"] == expected_text
+    assert payload["action"] == "brainstorm_autostart"
+    assert payload["session_id"] is not None
+    assert payload["inline_keyboard"] == []
+    assert len(payload["messages"]) == 2
+    assert "🌀 Prism AI" in payload["messages"][0]["text"]
+    assert "Опиши задачу или проблему" in payload["messages"][1]["text"]
 
-    # Verify both buttons exist with new brainstorm:mode:* callback data
-    callback_datas = [btn["callback_data"] for btn in payload["inline_keyboard"][0]]
-    assert "brainstorm:mode:reflect" in callback_datas
-    assert "brainstorm:mode:brainstorm" in callback_datas
+    active_session = db.exec(
+        select(TelegramSession)
+        .where(TelegramSession.telegram_user_id == 1001)
+        .where(TelegramSession.status == "active")
+    ).one()
+    assert active_session.brainstorm_phase == "collect_topic"
+    assert active_session.brainstorm_data is not None
 
 def test_returning_user_gets_continuity_aware_opening(client: TestClient, db: Session) -> None:
     # Arrange: create a session summary to simulate returning user
@@ -108,21 +108,39 @@ def test_returning_user_gets_continuity_aware_opening(client: TestClient, db: Se
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["action"] == "opening_prompt"
-    assert payload["messages"][0]["text"] == RETURNING_USER_OPENING_PROMPT
+    assert payload["action"] == "brainstorm_autostart"
+    assert payload["session_id"] is not None
+    assert payload["inline_keyboard"] == []
+    assert len(payload["messages"]) == 2
+    assert "🌀 Prism AI" in payload["messages"][0]["text"]
+    assert "Опиши задачу или проблему" in payload["messages"][1]["text"]
 
-    # Verify both buttons exist for returning user too
-    callback_datas = [btn["callback_data"] for btn in payload["inline_keyboard"][0]]
-    assert "brainstorm:mode:reflect" in callback_datas
-    assert "brainstorm:mode:brainstorm" in callback_datas
+    active_session = db.exec(
+        select(TelegramSession)
+        .where(TelegramSession.telegram_user_id == user_id)
+        .where(TelegramSession.status == "active")
+    ).one()
+    assert active_session.brainstorm_phase == "collect_topic"
+    assert active_session.brainstorm_data is not None
 
-def test_error_checking_prior_sessions_fallback_to_generic(client: TestClient, db: Session, monkeypatch) -> None:
-    from app.conversation import session_bootstrap
-
-    def mock_has_prior(*args, **kwargs):
-        raise Exception("DB error")
-
-    monkeypatch.setattr(session_bootstrap, "_has_prior_sessions", mock_has_prior)
+def test_start_reuses_existing_active_brainstorm_session(client: TestClient, db: Session) -> None:
+    user_id = 1007
+    existing_session = TelegramSession(
+        telegram_user_id=user_id,
+        chat_id=4001,
+        status="active",
+        brainstorm_phase="facilitation_loop",
+        brainstorm_data={
+            "topic": "старый контекст",
+            "goal": "старая цель",
+            "constraints": "старые ограничения",
+            "approach": "ideas",
+            "ideas": ["идея 1"],
+            "facilitation_turns": 1,
+        },
+    )
+    db.add(existing_session)
+    db.commit()
 
     response = client.post(
         "/api/v1/telegram/webhook",
@@ -131,18 +149,29 @@ def test_error_checking_prior_sessions_fallback_to_generic(client: TestClient, d
                 "message_id": 3,
                 "text": "/start",
                 "chat": {"id": 4001, "type": "private"},
-                "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+                "from": {"id": user_id, "is_bot": False, "first_name": "Masha"},
             }
         },
     )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["action"] == "opening_prompt"
-    
-    # Fallback uses generic opening
-    expected_text = OPENING_PROMPT
-    assert payload["messages"][0]["text"] == expected_text
+    assert payload["action"] == "brainstorm_autostart"
+    assert payload["session_id"] == str(existing_session.id)
+    assert len(payload["messages"]) == 2
+    assert "🌀 Prism AI" in payload["messages"][0]["text"]
+    assert "Опиши задачу или проблему" in payload["messages"][1]["text"]
+
+    db.expire_all()
+    active_session = db.exec(
+        select(TelegramSession)
+        .where(TelegramSession.telegram_user_id == user_id)
+        .where(TelegramSession.status == "active")
+    ).one()
+    assert active_session.id == existing_session.id
+    assert active_session.brainstorm_phase == "collect_topic"
+    assert active_session.brainstorm_data is not None
+    assert active_session.brainstorm_data["ideas"] == []
 
 def test_returning_user_first_message_uses_memory(client: TestClient, db: Session) -> None:
     # Arrange: create a session summary to simulate returning user
@@ -175,7 +204,7 @@ def test_returning_user_first_message_uses_memory(client: TestClient, db: Sessio
     )
     db.commit()
 
-    # Act: 1. /start
+    # Act: 1. /start (autostart brainstorming)
     client.post(
         "/api/v1/telegram/webhook",
         json={
@@ -194,7 +223,7 @@ def test_returning_user_first_message_uses_memory(client: TestClient, db: Sessio
         json={
             "message": {
                 "message_id": 11,
-                "text": "Мне опять немного тревожно.",
+                "text": "Мне опять немного тревожно после нашей ссоры вчера вечером.",
                 "chat": {"id": 3005, "type": "private"},
                 "from": {"id": user_id, "is_bot": False, "first_name": "Mila"},
             }
@@ -204,9 +233,8 @@ def test_returning_user_first_message_uses_memory(client: TestClient, db: Sessio
     # Assert: response is first_trust_response and includes memory context
     assert response.status_code == 200
     payload = response.json()
-    assert payload["action"] == "first_trust_response"
+    assert payload["action"] == "brainstorm_collect_topic"
 
-    from sqlmodel import select
     # Verify session in DB has merged context
     active_session = db.exec(
         select(TelegramSession)
@@ -214,5 +242,9 @@ def test_returning_user_first_message_uses_memory(client: TestClient, db: Sessio
         .where(TelegramSession.status == "active")
     ).one()
 
-    assert "страх одиночества" in active_session.working_context.lower()
-    assert "Мне опять немного тревожно" in active_session.working_context
+    assert active_session.brainstorm_phase == "collect_goal"
+    assert active_session.brainstorm_data is not None
+    assert (
+        active_session.brainstorm_data["topic"]
+        == "Мне опять немного тревожно после нашей ссоры вчера вечером."
+    )

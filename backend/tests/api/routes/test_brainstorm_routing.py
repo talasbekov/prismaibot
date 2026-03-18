@@ -7,12 +7,27 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete, select
 
-from app.models import ProcessedTelegramUpdate, TelegramSession
+from app.models import (
+    OperatorAlert,
+    OperatorInvestigation,
+    ProcessedTelegramUpdate,
+    ProfileFact,
+    SafetySignal,
+    SessionSummary,
+    SummaryGenerationSignal,
+    TelegramSession,
+)
 
 
 @pytest.fixture(autouse=True)
 def cleanup(db: Session):
     yield
+    db.exec(delete(SummaryGenerationSignal))
+    db.exec(delete(OperatorInvestigation))
+    db.exec(delete(OperatorAlert))
+    db.exec(delete(SafetySignal))
+    db.exec(delete(ProfileFact))
+    db.exec(delete(SessionSummary))
     db.exec(delete(ProcessedTelegramUpdate))
     db.exec(delete(TelegramSession))
     db.commit()
@@ -60,32 +75,28 @@ def _message_update(user_id: int, text: str, update_id: int = 9000) -> dict:
 # ── Task C1 ──────────────────────────────────────────────────────────────────
 
 
-def test_start_shows_new_mode_buttons(client: TestClient):
-    """AC2: /start response contains 'Разобраться в ситуации' and 'Придумать решение' buttons."""
+def test_start_autostarts_brainstorm(client: TestClient, db: Session):
+    """AC2: /start immediately enters brainstorm collect_topic without mode buttons."""
     resp = client.post("/api/v1/telegram/webhook", json=_start_update(111_001))
     assert resp.status_code == 200
     data = resp.json()
-    keyboard = data.get("inline_keyboard", [])
-    all_buttons = [btn for row in keyboard for btn in row]
-    callback_datas = [btn.get("callback_data", "") for btn in all_buttons]
-    assert "brainstorm:mode:reflect" in callback_datas
-    assert "brainstorm:mode:brainstorm" in callback_datas
-    # Old buttons must be gone
-    assert "mode:fast" not in callback_datas
-    assert "mode:deep" not in callback_datas
+    assert data["action"] == "brainstorm_autostart"
+    assert data.get("inline_keyboard", []) == []
+    assert len(data["messages"]) == 2
+    assert "🌀 Prism AI" in data["messages"][0]["text"]
+    assert "Опиши задачу или проблему" in data["messages"][1]["text"]
+    session = db.exec(
+        select(TelegramSession).where(TelegramSession.telegram_user_id == 111_001)
+    ).first()
+    assert session is not None
+    assert session.brainstorm_phase == "collect_topic"
 
 
 def test_start_does_not_show_old_buttons(client: TestClient):
-    """Old 'Коротко'/'Глубже' buttons are removed from /start."""
+    """Old mode buttons remain absent from /start response."""
     resp = client.post("/api/v1/telegram/webhook", json=_start_update(111_002))
     data = resp.json()
-    texts = [
-        btn.get("text", "")
-        for row in data.get("inline_keyboard", [])
-        for btn in row
-    ]
-    assert "Коротко" not in texts
-    assert "Глубже" not in texts
+    assert data.get("inline_keyboard", []) == []
 
 
 # ── Task C2 — brainstorm:mode:reflect ────────────────────────────────────────
@@ -94,8 +105,6 @@ def test_start_does_not_show_old_buttons(client: TestClient):
 def test_reflect_callback_sets_phase_reflect(client: TestClient, db: Session):
     """AC3: brainstorm:mode:reflect → brainstorm_phase='reflect' in DB."""
     user_id = 111_003
-    # Create session via /start first
-    client.post("/api/v1/telegram/webhook", json=_start_update(user_id))
     # Now send reflect callback
     resp = client.post(
         "/api/v1/telegram/webhook",
@@ -106,13 +115,12 @@ def test_reflect_callback_sets_phase_reflect(client: TestClient, db: Session):
         select(TelegramSession).where(TelegramSession.telegram_user_id == user_id)
     ).first()
     assert s is not None
-    assert s.brainstorm_phase == "reflect"
+    assert s.brainstorm_phase == "reflect_listen"
 
 
 def test_reflect_callback_returns_opening_prompt(client: TestClient):
     """AC3: brainstorm:mode:reflect → handled=True and response contains a message."""
     user_id = 111_004
-    client.post("/api/v1/telegram/webhook", json=_start_update(user_id))
     resp = client.post(
         "/api/v1/telegram/webhook",
         json=_callback_update(user_id, "brainstorm:mode:reflect", update_id=5004),
@@ -128,7 +136,6 @@ def test_reflect_callback_returns_opening_prompt(client: TestClient):
 def test_brainstorm_callback_sets_phase_collect_topic(client: TestClient, db: Session):
     """AC4: brainstorm:mode:brainstorm → brainstorm_phase='collect_topic' in DB."""
     user_id = 111_005
-    client.post("/api/v1/telegram/webhook", json=_start_update(user_id))
     with patch(
         "app.conversation._openai.call_chat",
         return_value=None,
@@ -148,7 +155,6 @@ def test_brainstorm_callback_sets_phase_collect_topic(client: TestClient, db: Se
 def test_brainstorm_callback_initializes_data(client: TestClient, db: Session):
     """AC4: brainstorm:mode:brainstorm → brainstorm_data initialized with empty schema."""
     user_id = 111_006
-    client.post("/api/v1/telegram/webhook", json=_start_update(user_id))
     with patch("app.conversation._openai.call_chat", return_value=None):
         client.post(
             "/api/v1/telegram/webhook",
@@ -168,7 +174,6 @@ def test_brainstorm_callback_initializes_data(client: TestClient, db: Session):
 def test_brainstorm_callback_returns_question(client: TestClient):
     """AC4: brainstorm:mode:brainstorm → bot asks first brainstorming question."""
     user_id = 111_007
-    client.post("/api/v1/telegram/webhook", json=_start_update(user_id))
     with patch("app.conversation._openai.call_chat", return_value=None):
         resp = client.post(
             "/api/v1/telegram/webhook",
@@ -187,13 +192,9 @@ def test_crisis_resets_brainstorm_phase(client: TestClient, db: Session):
     from app.safety import SafetyAssessment
 
     user_id = 111_010
-    # Start session and enter brainstorming
-    client.post("/api/v1/telegram/webhook", json=_start_update(user_id))
+    # Start session directly in brainstorming
     with patch("app.conversation._openai.call_chat", return_value=None):
-        client.post(
-            "/api/v1/telegram/webhook",
-            json=_callback_update(user_id, "brainstorm:mode:brainstorm", update_id=5010),
-        )
+        client.post("/api/v1/telegram/webhook", json=_start_update(user_id))
 
     # Verify brainstorm_phase is set
     s = db.exec(

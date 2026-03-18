@@ -46,7 +46,7 @@ from app.memory import (
     record_memory_failure,
     schedule_session_summary_generation,
 )
-from app.models import ProcessedTelegramUpdate, SessionSummary, TelegramSession
+from app.models import ProcessedTelegramUpdate, TelegramSession
 from app.ops.alerts import create_and_deliver_operator_alert
 from app.ops.deletion import DeletionRequestIntakeError, request_user_data_deletion
 from app.ops.signals import record_retryable_signal
@@ -66,6 +66,7 @@ CrisisState = Literal["normal", "crisis_active", "step_down_pending"]
 
 # Matches TelegramSession.last_user_message max_length in models.py
 MAX_USER_MESSAGE_LENGTH = 2000
+_BRAINSTORM_CONTEXT_MARKER = "\n[Brainstorm: "
 
 OPENING_PROMPT = (
     "🌀 Prism AI\n\n"
@@ -242,8 +243,6 @@ async def handle_session_entry(
                 return await _handle_admin_callback(session, cbq)
             if callback_data.startswith("brainstorm:mode:"):
                 return await _handle_brainstorm_mode_callback(session, cbq)
-            if callback_data.startswith("brainstorm:approach:"):
-                return await _handle_brainstorm_approach_callback(session, cbq)
 
         mode_callback = _parse_mode_callback(update)
         if mode_callback is not None:
@@ -259,7 +258,11 @@ async def handle_session_entry(
         )
 
     if message.text.strip() == "/start":
-        return _build_opening_prompt(session=session, telegram_user_id=message.telegram_user_id)
+        return _start_brainstorming_session(
+            session=session,
+            telegram_user_id=message.telegram_user_id,
+            chat_id=message.chat_id,
+        )
 
     if message.text.strip() == "/status":
         return _handle_status_command(
@@ -1386,7 +1389,7 @@ def _update_brainstorm_context(working_context: str | None, data: dict | None) -
     if not parts:
         return working_context or ""
     brainstorm_summary = "; ".join(parts)
-    base = working_context or ""
+    base = _strip_brainstorm_context_marker(working_context)
     return f"{base}\n[Brainstorm: {brainstorm_summary}]".strip()
 
 
@@ -1434,10 +1437,34 @@ def _get_or_create_active_session(
 
 
 def _save_session(session: Session, session_record: TelegramSession) -> None:
+    _normalize_session_lengths(session_record)
     session_record.updated_at = datetime.now(timezone.utc)
     session.add(session_record)
     session.commit()
     session.refresh(session_record)
+
+
+def _strip_brainstorm_context_marker(working_context: str | None) -> str:
+    if not working_context:
+        return ""
+    marker_index = working_context.find(_BRAINSTORM_CONTEXT_MARKER)
+    if marker_index == -1:
+        return working_context
+    return working_context[:marker_index].rstrip()
+
+
+def _trim_text(value: str | None, limit: int = MAX_USER_MESSAGE_LENGTH) -> str | None:
+    if value is None or len(value) <= limit:
+        return value
+    if limit <= 1:
+        return value[:limit]
+    return f"{value[: limit - 1]}…"
+
+
+def _normalize_session_lengths(session_record: TelegramSession) -> None:
+    session_record.last_user_message = _trim_text(session_record.last_user_message)
+    session_record.last_bot_prompt = _trim_text(session_record.last_bot_prompt)
+    session_record.working_context = _trim_text(session_record.working_context)
 
 
 def _safe_load_prior_memory_context(
@@ -1562,27 +1589,20 @@ async def _handle_brainstorm_mode_callback(
         return TelegramWebhookResponse(status="error", action="brainstorm_mode_error", handled=False)
 
     mode = callback_query.get("data", "").split(":")[-1]
-    active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
-
     if mode == "reflect":
+        active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
         from app.conversation.reflection import FALLBACKS
         active_session.brainstorm_phase = "reflect_listen"
         active_session.reflective_mode = "deep"  # F6 fix
         message_texts = [FALLBACKS["reflect_listen"]]
         action = "brainstorm_mode_reflect"
     else:  # "brainstorm"
-        from app.conversation.brainstorming import FALLBACKS
-        active_session.brainstorm_phase = "collect_topic"
-        active_session.brainstorm_data = {
-            "topic": "",
-            "goal": "",
-            "constraints": "",
-            "approach": "",
-            "ideas": [],
-            "facilitation_turns": 0,
-        }
-        message_texts = [FALLBACKS["collect_topic"]]
-        action = "brainstorm_mode_brainstorm"
+        return _start_brainstorming_session(
+            session=session,
+            telegram_user_id=telegram_user_id,
+            chat_id=chat_id,
+            action="brainstorm_mode_brainstorm",
+        )
 
     _save_session(session, active_session)
     return _build_response(
@@ -1593,80 +1613,32 @@ async def _handle_brainstorm_mode_callback(
     )
 
 
-async def _handle_brainstorm_approach_callback(
-    session: Session, callback_query: dict[str, Any]
-) -> TelegramWebhookResponse:
-    from_field = callback_query.get("from")
-    message_field = callback_query.get("message")
-    if not isinstance(from_field, dict) or not isinstance(message_field, dict):
-        return TelegramWebhookResponse(status="error", action="brainstorm_approach_error", handled=False)
-    chat_field = message_field.get("chat")
-    if not isinstance(chat_field, dict):
-        return TelegramWebhookResponse(status="error", action="brainstorm_approach_error", handled=False)
-    telegram_user_id = from_field.get("id")
-    chat_id = chat_field.get("id")
-    if not isinstance(telegram_user_id, int) or not isinstance(chat_id, int):
-        return TelegramWebhookResponse(status="error", action="brainstorm_approach_error", handled=False)
 
-    approach = callback_query.get("data", "").split(":")[-1]
-    active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
-
-    data = active_session.brainstorm_data or {}
-    data["approach"] = approach
-    active_session.brainstorm_data = data
-    active_session.brainstorm_phase = "facilitation_loop"
-
-    from app.conversation.brainstorming import APPROACH_PROMPTS, FALLBACKS
-    fallback_key = f"{approach}_fallback"
-    message_text = APPROACH_PROMPTS.get(fallback_key) or FALLBACKS.get("facilitation_loop", "")
-    _save_session(session, active_session)
-    return _build_response(
-        action="brainstorm_approach_selected",
-        session_record=active_session,
-        message_texts=[message_text],
-        extra_signals=("typing",),
-    )
-
-
-def _has_prior_sessions(session: Session, telegram_user_id: int) -> bool:
-    return (
-        session.exec(
-            select(SessionSummary)
-            .where(SessionSummary.telegram_user_id == telegram_user_id)
-            .limit(1)
-        ).first() is not None
-    )
-
-
-def _safe_check_has_prior_sessions(session: Session, telegram_user_id: int) -> bool:
-    try:
-        return _has_prior_sessions(session, telegram_user_id)
-    except Exception:
-        logger.exception(
-            "Failed to check prior sessions for telegram_user_id=%s; defaulting to new user opening",
-            telegram_user_id,
-        )
-        return False
-
-
-def _build_opening_prompt(
+def _start_brainstorming_session(
     *,
     session: Session,
     telegram_user_id: int,
+    chat_id: int,
+    action: str = "brainstorm_autostart",
 ) -> TelegramWebhookResponse:
-    has_prior = _safe_check_has_prior_sessions(session, telegram_user_id)
+    from app.conversation.brainstorming import FALLBACKS
 
-    prompt_text = RETURNING_USER_OPENING_PROMPT if has_prior else OPENING_PROMPT
-
-    return TelegramWebhookResponse(
-        status="ok",
-        action="opening_prompt",
-        signals=["typing"],
-        messages=[TelegramMessageOut(text=prompt_text)],
-        inline_keyboard=[[
-            InlineButton(text="🔍 Разобраться в ситуации", callback_data="brainstorm:mode:reflect"),
-            InlineButton(text="💡 Придумать решение", callback_data="brainstorm:mode:brainstorm"),
-        ]],
+    active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
+    active_session.brainstorm_phase = "collect_topic"
+    active_session.brainstorm_data = {
+        "topic": "",
+        "goal": "",
+        "constraints": "",
+        "approach": "",
+        "ideas": [],
+        "facilitation_turns": 0,
+    }
+    _save_session(session, active_session)
+    return _build_response(
+        action=action,
+        session_record=active_session,
+        message_texts=[OPENING_PROMPT, FALLBACKS["collect_topic"]],
+        extra_signals=("typing",),
     )
 
 

@@ -4,7 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session
 
@@ -28,7 +28,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-...
+
 async def process_apipay_webhook(
     session: Session,
     payload: dict[str, Any],

@@ -1,4 +1,4 @@
 from .orchestrator import BrainstormResult, route
-from .prompts import APPROACH_PROMPTS, FALLBACKS
+from .prompts import FALLBACKS
 
-__all__ = ["BrainstormResult", "route", "FALLBACKS", "APPROACH_PROMPTS"]
+__all__ = ["BrainstormResult", "route", "FALLBACKS"]

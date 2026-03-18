@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 from app.conversation._openai import async_call_chat
 from app.conversation.brainstorming.prompts import (
     APPROACH_PROMPTS,
-    APPROACH_LABELS,
     FALLBACKS,
     SYSTEM_PROMPTS,
 )
@@ -43,7 +42,6 @@ async def route(session_record: "TelegramSession", user_text: str) -> Brainstorm
         "collect_topic": _handle_collect_topic,
         "collect_goal": _handle_collect_goal,
         "collect_constraints": _handle_collect_constraints,
-        "choose_approach": _handle_choose_approach,
         "facilitation_loop": _handle_facilitation_loop,
         "cluster_ideas": _handle_cluster_ideas,
         "prioritize": _handle_prioritize,
@@ -81,8 +79,8 @@ async def _ask_openai(phase: str, user_text: str, extra_context: str = "") -> st
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
         ],
-        max_tokens=250,
-        temperature=0.7,
+        max_tokens=450,
+        temperature=0.85,
     )
 
 
@@ -132,35 +130,18 @@ async def _handle_collect_constraints(user_text: str, data: dict, _sr: "Telegram
             updated_data=data,
         )
     data["constraints"] = user_text
-    # Return approach selection buttons
-    keyboard = [[
-        {"text": label, "callback_data": f"brainstorm:approach:{key}"}
-        for key, label in APPROACH_LABELS.items()
-    ]]
-    prompt = (
-        "Отлично! Теперь выбери подход, который поможет нам генерировать идеи:"
+    data.setdefault("approach", "ideas")
+    context = (
+        f"Тема: {data.get('topic', '')}\n"
+        f"Цель: {data.get('goal', '')}\n"
+        f"Ограничения: {user_text}"
     )
+    reply = await _ask_openai("facilitation_loop", user_text, context) or FALLBACKS["facilitation_loop"]
     return BrainstormResult(
-        messages=(prompt,),
+        messages=(reply,),
         action="brainstorm_collect_constraints",
-        next_phase="choose_approach",
+        next_phase="facilitation_loop",
         updated_data=data,
-        inline_keyboard=keyboard,
-    )
-
-
-async def _handle_choose_approach(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
-    # Text message while waiting for approach button — repeat the buttons
-    keyboard = [[
-        {"text": label, "callback_data": f"brainstorm:approach:{key}"}
-        for key, label in APPROACH_LABELS.items()
-    ]]
-    return BrainstormResult(
-        messages=("Пожалуйста, выбери подход, нажав на одну из кнопок выше.",),
-        action="brainstorm_choose_approach",
-        next_phase="choose_approach",
-        updated_data=data,
-        inline_keyboard=keyboard,
     )
 
 
@@ -174,29 +155,30 @@ async def _handle_facilitation_loop(user_text: str, data: dict, _sr: "TelegramSe
     turns: int = int(data.get("facilitation_turns", 0)) + 1
     data["facilitation_turns"] = turns
 
-    approach = data.get("approach", "ideas")
-    system = APPROACH_PROMPTS.get(approach, SYSTEM_PROMPTS["facilitation_loop"])
-    context = f"Тема: {data.get('topic', '')}\nУже назвал: {len(ideas)} идей"
+    at_threshold = turns >= _FACILITATION_CLUSTER_THRESHOLD
+    if at_threshold:
+        system = SYSTEM_PROMPTS["cluster_ideas"]
+        next_phase = "cluster_ideas"
+    else:
+        approach = data.get("approach", "ideas")
+        system = APPROACH_PROMPTS.get(approach, SYSTEM_PROMPTS["facilitation_loop"])
+        next_phase = "facilitation_loop"
+
+    context = f"Тема: {data.get('topic', '')}\nВсе идеи:\n" + "\n".join(f"- {i}" for i in ideas)
     reply = await async_call_chat(
         [
             {"role": "system", "content": system},
             {"role": "user", "content": f"{context}\n\nПоследняя идея: {user_text}"},
         ],
-        max_tokens=200,
-    ) or FALLBACKS["facilitation_loop"]
-
-    inline_keyboard: list[list[dict]] = []
-    if turns >= _FACILITATION_CLUSTER_THRESHOLD:
-        inline_keyboard = [[
-            {"text": "Перейти к группировке идей", "callback_data": "brainstorm:phase:cluster_ideas"}
-        ]]
+        max_tokens=450,
+        temperature=0.85,
+    ) or (FALLBACKS["cluster_ideas"] if at_threshold else FALLBACKS["facilitation_loop"])
 
     return BrainstormResult(
         messages=(reply,),
         action="brainstorm_facilitation_loop",
-        next_phase="facilitation_loop",
+        next_phase=next_phase,
         updated_data=data,
-        inline_keyboard=inline_keyboard,
     )
 
 

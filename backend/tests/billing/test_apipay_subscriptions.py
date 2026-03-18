@@ -15,9 +15,8 @@ async def test_create_apipay_subscription_success(db: Session):
         id=555,
         status="active",
         amount=3000.0,
-        period="monthly"
-    )
-    
+        billing_period="monthly"
+    )    
     with patch("app.billing.apipay_client.ApiPayClient.create_subscription", return_value=mock_resp):
         res = await service.create_apipay_subscription(db, telegram_user_id=user_id, phone_number=phone)
         assert "оформлена" in res

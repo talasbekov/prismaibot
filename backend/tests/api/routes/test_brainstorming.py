@@ -1,18 +1,34 @@
 """Story D — Task D4: Full brainstorming orchestrator tests (10 scenarios)."""
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete, select
 
-from app.models import ProcessedTelegramUpdate, TelegramSession
+from app.models import (
+    OperatorAlert,
+    OperatorInvestigation,
+    ProcessedTelegramUpdate,
+    ProfileFact,
+    SafetySignal,
+    SessionSummary,
+    SummaryGenerationSignal,
+    TelegramSession,
+)
+from app.conversation.session_bootstrap import _save_session, _update_brainstorm_context
 
 
 @pytest.fixture(autouse=True)
 def cleanup(db: Session):
     yield
+    db.exec(delete(SummaryGenerationSignal))
+    db.exec(delete(OperatorInvestigation))
+    db.exec(delete(OperatorAlert))
+    db.exec(delete(SafetySignal))
+    db.exec(delete(ProfileFact))
+    db.exec(delete(SessionSummary))
     db.exec(delete(ProcessedTelegramUpdate))
     db.exec(delete(TelegramSession))
     db.commit()
@@ -57,13 +73,9 @@ def _msg(user_id: int, text: str, update_id: int = 3) -> dict:
 
 
 def _enter_brainstorm(client: TestClient, user_id: int) -> None:
-    """Start session and select brainstorm mode."""
-    client.post("/api/v1/telegram/webhook", json=_start(user_id, update_id=user_id * 10))
+    """Start session directly in brainstorming mode."""
     with patch("app.conversation._openai.call_chat", return_value=None):
-        client.post(
-            "/api/v1/telegram/webhook",
-            json=_cbq(user_id, "brainstorm:mode:brainstorm", update_id=user_id * 10 + 1),
-        )
+        client.post("/api/v1/telegram/webhook", json=_start(user_id, update_id=user_id * 10))
 
 
 def _get_session(db: Session, user_id: int) -> TelegramSession | None:
@@ -73,18 +85,20 @@ def _get_session(db: Session, user_id: int) -> TelegramSession | None:
     ).first()
 
 
-# ── Scenario 1: /start shows new buttons ─────────────────────────────────────
+# ── Scenario 1: /start autostarts brainstorming ──────────────────────────────
 
-def test_scenario_1_start_shows_correct_buttons(client: TestClient):
-    """/start → 'Разобраться в ситуации' and 'Придумать решение' buttons, not old ones."""
+def test_scenario_1_start_autostarts_brainstorming(client: TestClient, db: Session):
+    """/start sends intro + first brainstorming question and enters collect_topic."""
     resp = client.post("/api/v1/telegram/webhook", json=_start(201_001))
     data = resp.json()
-    all_btns = [b for row in data.get("inline_keyboard", []) for b in row]
-    cb_datas = [b.get("callback_data", "") for b in all_btns]
-    assert "brainstorm:mode:reflect" in cb_datas
-    assert "brainstorm:mode:brainstorm" in cb_datas
-    assert "mode:fast" not in cb_datas
-    assert "mode:deep" not in cb_datas
+    assert data["action"] == "brainstorm_autostart"
+    assert data.get("inline_keyboard", []) == []
+    assert len(data["messages"]) == 2
+    assert "🌀 Prism AI" in data["messages"][0]["text"]
+    assert "Опиши задачу или проблему" in data["messages"][1]["text"]
+    session = _get_session(db, 201_001)
+    assert session is not None
+    assert session.brainstorm_phase == "collect_topic"
 
 
 # ── Scenario 2: brainstorm mode callback ─────────────────────────────────────
@@ -92,7 +106,6 @@ def test_scenario_1_start_shows_correct_buttons(client: TestClient):
 def test_scenario_2_brainstorm_callback_sets_collect_topic(client: TestClient, db: Session):
     """callback brainstorm:mode:brainstorm → phase=collect_topic + question returned."""
     user_id = 201_002
-    client.post("/api/v1/telegram/webhook", json=_start(user_id, update_id=10))
     with patch("app.conversation._openai.call_chat", return_value=None):
         resp = client.post(
             "/api/v1/telegram/webhook",
@@ -111,7 +124,6 @@ def test_scenario_2_brainstorm_callback_sets_collect_topic(client: TestClient, d
 def test_scenario_3_reflect_callback_sets_reflect_phase(client: TestClient, db: Session):
     """callback brainstorm:mode:reflect → phase=reflect + standard opening prompt."""
     user_id = 201_003
-    client.post("/api/v1/telegram/webhook", json=_start(user_id, update_id=10))
     resp = client.post(
         "/api/v1/telegram/webhook",
         json=_cbq(user_id, "brainstorm:mode:reflect", update_id=11),
@@ -120,7 +132,7 @@ def test_scenario_3_reflect_callback_sets_reflect_phase(client: TestClient, db: 
     assert resp.json()["handled"] is True
     s = _get_session(db, user_id)
     assert s is not None
-    assert s.brainstorm_phase == "reflect"
+    assert s.brainstorm_phase == "reflect_listen"
 
 
 # ── Scenario 4: phase transitions collect_topic → goal → constraints ──────────
@@ -130,7 +142,7 @@ def test_scenario_4_phase_transitions_and_data_accumulation(client: TestClient, 
     user_id = 201_004
     _enter_brainstorm(client, user_id)
 
-    with patch("app.conversation.brainstorming.orchestrator.call_chat", return_value=None):
+    with patch("app.conversation.brainstorming.orchestrator.async_call_chat", new_callable=AsyncMock, return_value=None):
         # Turn 1: answer to collect_topic (enough words)
         client.post(
             "/api/v1/telegram/webhook",
@@ -157,14 +169,14 @@ def test_scenario_4_phase_transitions_and_data_accumulation(client: TestClient, 
             json=_msg(user_id, "Бюджет ноль рублей, времени два часа в день максимум", update_id=102),
         )
         s = _get_session(db, user_id)
-        assert s.brainstorm_phase == "choose_approach"
+        assert s.brainstorm_phase == "facilitation_loop"
         assert "два часа" in s.brainstorm_data.get("constraints", "")
 
 
 # ── Scenario 5: facilitation_loop — cluster button threshold ─────────────────
 
-def test_scenario_5_facilitation_loop_cluster_button_threshold(client: TestClient, db: Session):
-    """facilitation_loop: 2 turns → no cluster button; 3rd turn → cluster button appears."""
+def test_scenario_5_facilitation_loop_phase_transition_at_threshold(client: TestClient, db: Session):
+    """facilitation_loop: turns 1-2 stay in facilitation_loop; turn 3 auto-advances to cluster_ideas."""
     user_id = 201_005
     _enter_brainstorm(client, user_id)
 
@@ -183,30 +195,31 @@ def test_scenario_5_facilitation_loop_cluster_button_threshold(client: TestClien
     db.add(s)
     db.commit()
 
-    with patch("app.conversation.brainstorming.orchestrator.call_chat", return_value=None):
-        # Turn 1 (facilitation_turns will become 1)
-        resp1 = client.post(
+    with patch("app.conversation.brainstorming.orchestrator.async_call_chat", new_callable=AsyncMock, return_value=None):
+        # Turn 1 (facilitation_turns = 1) → stays in facilitation_loop
+        client.post(
             "/api/v1/telegram/webhook",
             json=_msg(user_id, "Первая идея вот такая замечательная", update_id=200),
         )
-        kb1 = [b for row in resp1.json().get("inline_keyboard", []) for b in row]
-        assert not any("кластер" in b.get("text", "").lower() or "группировк" in b.get("text", "").lower() for b in kb1)
+        s = _get_session(db, user_id)
+        assert s.brainstorm_phase == "facilitation_loop"
 
-        # Turn 2 (facilitation_turns = 2)
-        resp2 = client.post(
+        # Turn 2 (facilitation_turns = 2) → stays in facilitation_loop
+        client.post(
             "/api/v1/telegram/webhook",
             json=_msg(user_id, "Вторая идея немного другого плана", update_id=201),
         )
-        kb2 = [b for row in resp2.json().get("inline_keyboard", []) for b in row]
-        assert not any("группировк" in b.get("text", "").lower() for b in kb2)
+        s = _get_session(db, user_id)
+        assert s.brainstorm_phase == "facilitation_loop"
 
-        # Turn 3 (facilitation_turns = 3) → cluster button must appear
+        # Turn 3 (facilitation_turns = 3) → auto-advances to cluster_ideas, no buttons
         resp3 = client.post(
             "/api/v1/telegram/webhook",
             json=_msg(user_id, "Третья идея и теперь можно группировать", update_id=202),
         )
-        kb3 = [b for row in resp3.json().get("inline_keyboard", []) for b in row]
-        assert any("группировк" in b.get("text", "").lower() for b in kb3)
+        assert resp3.json().get("inline_keyboard", []) == []
+        s = _get_session(db, user_id)
+        assert s.brainstorm_phase == "cluster_ideas"
 
 
 # ── Scenario 6: facilitation_loop — ideas accumulate in order ─────────────────
@@ -235,7 +248,7 @@ def test_scenario_6_ideas_accumulate_in_order(client: TestClient, db: Session):
         "Идея бета с пятью словами вот",
         "Идея гамма с пятью словами вот",
     ]
-    with patch("app.conversation.brainstorming.orchestrator.call_chat", return_value=None):
+    with patch("app.conversation.brainstorming.orchestrator.async_call_chat", new_callable=AsyncMock, return_value=None):
         for i, idea in enumerate(ideas_to_send):
             client.post(
                 "/api/v1/telegram/webhook",
@@ -258,7 +271,7 @@ def test_scenario_7_openai_fallback_returns_fallback_text(client: TestClient, db
     user_id = 201_007
     _enter_brainstorm(client, user_id)
 
-    with patch("app.conversation.brainstorming.orchestrator.call_chat", return_value=None):
+    with patch("app.conversation.brainstorming.orchestrator.async_call_chat", new_callable=AsyncMock, return_value=None):
         resp = client.post(
             "/api/v1/telegram/webhook",
             json=_msg(user_id, "Хочу разобраться с управлением командой", update_id=400),
@@ -336,7 +349,7 @@ def test_scenario_9_phase_persistence_resumes_from_cluster_ideas(client: TestCli
     db.add(s)
     db.commit()
 
-    with patch("app.conversation.brainstorming.orchestrator.call_chat", return_value=None):
+    with patch("app.conversation.brainstorming.orchestrator.async_call_chat", new_callable=AsyncMock, return_value=None):
         resp = client.post(
             "/api/v1/telegram/webhook",
             json=_msg(user_id, "Продолжаем — готов группировать идеи", update_id=600),
@@ -356,7 +369,7 @@ def test_scenario_10_short_input_keeps_collect_topic_phase(client: TestClient, d
     user_id = 201_010
     _enter_brainstorm(client, user_id)
 
-    with patch("app.conversation.brainstorming.orchestrator.call_chat", return_value=None):
+    with patch("app.conversation.brainstorming.orchestrator.async_call_chat", new_callable=AsyncMock, return_value=None):
         resp = client.post(
             "/api/v1/telegram/webhook",
             json=_msg(user_id, "курс Python", update_id=700),  # only 2 words
@@ -369,6 +382,48 @@ def test_scenario_10_short_input_keeps_collect_topic_phase(client: TestClient, d
     s = _get_session(db, user_id)
     assert s is not None
     assert s.brainstorm_phase == "collect_topic"
-    # topic should still be empty (not saved)
-    assert s.brainstorm_data is not None
-    assert s.brainstorm_data.get("topic", "") == ""
+
+
+def test_update_brainstorm_context_replaces_previous_brainstorm_summary() -> None:
+    initial_context = (
+        "[recall] Ранее был конфликт с коллегами.\n"
+        "[Brainstorm: Тема: старая тема; Цель: старая цель]"
+    )
+    updated = _update_brainstorm_context(
+        initial_context,
+        {
+            "topic": "новая тема",
+            "goal": "новая цель",
+            "ideas": ["a", "b"],
+        },
+    )
+
+    assert "старая тема" not in updated
+    assert "новая тема" in updated
+    assert "новая цель" in updated
+    assert "Идей собрано: 2" in updated
+    assert updated.count("[Brainstorm:") == 1
+
+
+def test_save_session_trims_overlong_context_fields(db: Session) -> None:
+    session_record = TelegramSession(
+        telegram_user_id=301_001,
+        chat_id=301_001,
+        working_context="w" * 2500,
+        last_bot_prompt="b" * 2500,
+        last_user_message="u" * 2500,
+    )
+
+    _save_session(db, session_record)
+
+    refreshed = _get_session(db, 301_001)
+    assert refreshed is not None
+    assert refreshed.working_context is not None
+    assert refreshed.last_bot_prompt is not None
+    assert refreshed.last_user_message is not None
+    assert len(refreshed.working_context) == 2000
+    assert len(refreshed.last_bot_prompt) == 2000
+    assert len(refreshed.last_user_message) == 2000
+    assert refreshed.working_context.endswith("…")
+    assert refreshed.last_bot_prompt.endswith("…")
+    assert refreshed.last_user_message.endswith("…")

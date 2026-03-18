@@ -25,7 +25,7 @@ class ApiPaySubscriptionResponse(BaseModel):
     id: int
     status: str
     amount: float
-    period: str
+    billing_period: str
 
 
 class ApiPayClient:
@@ -56,7 +56,6 @@ class ApiPayClient:
         payload: dict[str, Any] = {
             "amount": amount,
             "phone_number": phone_number,
-            "is_sandbox": self.is_sandbox,
         }
         if external_order_id:
             payload["external_order_id"] = external_order_id
@@ -89,8 +88,7 @@ class ApiPayClient:
         payload: dict[str, Any] = {
             "amount": amount,
             "phone_number": phone_number,
-            "period": period,
-            "is_sandbox": self.is_sandbox,
+            "billing_period": period,
         }
         if description:
             payload["description"] = description
@@ -107,13 +105,14 @@ class ApiPayClient:
                 raise ApiPayError(f"ApiPay error {response.status_code}: {response.text}")
             
             data = response.json()
-            return ApiPaySubscriptionResponse(**data)
+            sub_data = data.get("subscription", data)
+            return ApiPaySubscriptionResponse(**sub_data)
 
     async def cancel_subscription(self, subscription_id: int) -> bool:
         """Cancel an active subscription in ApiPay."""
         async with httpx.AsyncClient() as client:
-            response = await client.delete(
-                f"{self.base_url}/subscriptions/{subscription_id}",
+            response = await client.post(
+                f"{self.base_url}/subscriptions/{subscription_id}/cancel",
                 headers=self.headers,
                 timeout=10.0,
             )
