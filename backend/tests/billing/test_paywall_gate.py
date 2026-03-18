@@ -47,7 +47,8 @@ def test_paywall_message_contract() -> None:
     assert "premium" in PAYWALL_MESSAGE.lower()
 
 
-def test_paywall_gate_triggers_on_threshold_reached(db: Session) -> None:
+@pytest.mark.anyio
+async def test_paywall_gate_triggers_on_threshold_reached(db: Session) -> None:
     """User with threshold_reached_at set gets the paywall and no evaluation."""
     user_id = 90001
     chat_id = 29001
@@ -55,8 +56,7 @@ def test_paywall_gate_triggers_on_threshold_reached(db: Session) -> None:
     db.add(UserAccessState(
         telegram_user_id=user_id,
         access_tier="free",
-        free_sessions_used=3,
-        threshold_reached_at=datetime.now(timezone.utc),
+        first_session_completed=True,
     ))
     db.commit()
 
@@ -69,7 +69,7 @@ def test_paywall_gate_triggers_on_threshold_reached(db: Session) -> None:
     with patch(
         "app.conversation.session_bootstrap.evaluate_incoming_message_safety"
     ) as mock_safety:
-        result = _handle_message(db, message, background_tasks=MagicMock())
+        result = await _handle_message(db, message, background_tasks=MagicMock())
 
     assert result.action == "paywall_gate"
     assert "paywall_shown" in result.signals
@@ -83,7 +83,8 @@ def test_paywall_gate_triggers_on_threshold_reached(db: Session) -> None:
     assert session_record.last_user_message == "Привет, начну новую сессию."
 
 
-def test_paywall_gate_bypassed_in_crisis_state(db: Session) -> None:
+@pytest.mark.anyio
+async def test_paywall_gate_bypassed_in_crisis_state(db: Session) -> None:
     """If crisis_state='crisis_active', billing gate is bypassed completely."""
     user_id = 90002
     chat_id = 29002
@@ -91,8 +92,7 @@ def test_paywall_gate_bypassed_in_crisis_state(db: Session) -> None:
     db.add(UserAccessState(
         telegram_user_id=user_id,
         access_tier="free",
-        free_sessions_used=3,
-        threshold_reached_at=datetime.now(timezone.utc),
+        first_session_completed=True,
     ))
 
     session_record = TelegramSession(
@@ -122,14 +122,15 @@ def test_paywall_gate_bypassed_in_crisis_state(db: Session) -> None:
         patch("app.conversation.session_bootstrap.evaluate_incoming_message_safety", return_value=mock_safety),
         patch("app.conversation.session_bootstrap.create_and_deliver_operator_alert"),
     ):
-        result = _handle_message(db, message, background_tasks=MagicMock())
+        result = await _handle_message(db, message, background_tasks=MagicMock())
 
     assert result.action != "paywall_gate"
     assert "paywall_shown" not in result.signals
     assert "crisis_mode_active" in result.signals
 
 
-def test_paywall_gate_bypassed_when_threshold_not_reached(db: Session) -> None:
+@pytest.mark.anyio
+async def test_paywall_gate_bypassed_when_threshold_not_reached(db: Session) -> None:
     """User with threshold_reached_at=None proceeds to normal flow."""
     user_id = 90003
     chat_id = 29003
@@ -157,19 +158,20 @@ def test_paywall_gate_bypassed_when_threshold_not_reached(db: Session) -> None:
 
     with (
         patch("app.conversation.session_bootstrap.evaluate_incoming_message_safety", return_value=mock_safety),
-        patch("app.conversation.session_bootstrap._compose_first_trust_response") as mock_first_resp,
+        patch("app.conversation.first_response.compose_first_trust_response_with_memory") as mock_first_resp,
         patch("app.conversation.session_bootstrap._safe_load_prior_memory_context", return_value=None),
         patch("app.conversation.session_bootstrap._merge_context_for_session", return_value="context"),
     ):
         from app.conversation.first_response import FirstTrustResponse
         mock_first_resp.return_value = FirstTrustResponse(messages=("Привет",))
-        result = _handle_message(db, message, background_tasks=MagicMock())
+        result = await _handle_message(db, message, background_tasks=MagicMock())
 
     assert result.action != "paywall_gate"
     assert "paywall_shown" not in result.signals
 
 
-def test_billing_access_check_fails_open(db: Session) -> None:
+@pytest.mark.anyio
+async def test_billing_access_check_fails_open(db: Session) -> None:
     """If get_user_access_state raises, fall through to normal flow and record signal."""
     user_id = 90004
     chat_id = 29004
@@ -190,13 +192,13 @@ def test_billing_access_check_fails_open(db: Session) -> None:
     with (
         patch("app.conversation.session_bootstrap.get_user_access_state", side_effect=ValueError("DB drop")),
         patch("app.conversation.session_bootstrap.evaluate_incoming_message_safety", return_value=mock_safety),
-        patch("app.conversation.session_bootstrap._compose_first_trust_response") as mock_first_resp,
+        patch("app.conversation.first_response.compose_first_trust_response_with_memory") as mock_first_resp,
         patch("app.conversation.session_bootstrap._safe_load_prior_memory_context", return_value=None),
         patch("app.conversation.session_bootstrap._merge_context_for_session", return_value="context"),
     ):
         from app.conversation.first_response import FirstTrustResponse
         mock_first_resp.return_value = FirstTrustResponse(messages=("Привет",))
-        result = _handle_message(db, message, background_tasks=MagicMock())
+        result = await _handle_message(db, message, background_tasks=MagicMock())
 
     assert result.action != "paywall_gate"
 

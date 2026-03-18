@@ -21,6 +21,11 @@ from app.models import (
 
 @pytest.fixture(autouse=True)
 def clear_telegram_sessions(db: Session) -> None:
+    from app.billing.models import FreeSessionEvent, PurchaseIntent, UserAccessState
+    from app.models import DeletionRequest, PeriodicInsight, ProcessedTelegramUpdate
+    db.execute(delete(FreeSessionEvent))
+    db.execute(delete(PurchaseIntent))
+    db.execute(delete(UserAccessState))
     db.execute(delete(SummaryGenerationSignal))
     db.execute(delete(OperatorInvestigation))
     db.execute(delete(OperatorAlert))
@@ -28,6 +33,9 @@ def clear_telegram_sessions(db: Session) -> None:
     db.execute(delete(ProfileFact))
     db.execute(delete(SessionSummary))
     db.execute(delete(TelegramSession))
+    db.execute(delete(ProcessedTelegramUpdate))
+    db.execute(delete(PeriodicInsight))
+    db.execute(delete(DeletionRequest))
     db.commit()
 
 
@@ -1892,8 +1900,8 @@ def test_opening_prompt_includes_mode_selection_buttons(client: TestClient) -> N
     assert payload["action"] == "opening_prompt"
     assert len(payload["inline_keyboard"]) == 1
     callback_datas = [btn["callback_data"] for btn in payload["inline_keyboard"][0]]
-    assert "mode:fast" in callback_datas
-    assert "mode:deep" in callback_datas
+    assert "brainstorm:mode:reflect" in callback_datas
+    assert "brainstorm:mode:brainstorm" in callback_datas
 
 
 def test_mode_selection_fast_via_callback(client: TestClient, db: Session) -> None:
@@ -1981,7 +1989,8 @@ class _FakeBackgroundTasks:
         self.calls.append((func, args, kwargs))
 
 
-def test_closure_schedules_summary_background_task_without_blocking_response(
+@pytest.mark.anyio
+async def test_closure_schedules_summary_background_task_without_blocking_response(
     db: Session,
 ) -> None:
     user_id = 5010
@@ -1997,11 +2006,11 @@ def test_closure_schedules_summary_background_task_without_blocking_response(
             }
         }
 
-    handle_session_entry(db, _payload("Мы снова поссорились, и мне обидно.", 1))
-    handle_session_entry(db, _payload("Он перебил меня и ушел.", 2))
+    await handle_session_entry(db, _payload("Мы снова поссорились, и мне обидно.", 1))
+    await handle_session_entry(db, _payload("Он перебил меня и ушел.", 2))
 
     background_tasks = _FakeBackgroundTasks()
-    response = handle_session_entry(
+    response = await handle_session_entry(
         db,
         _payload("Больше всего меня ранит, что это повторяется.", 3),
         background_tasks=cast(Any, background_tasks),

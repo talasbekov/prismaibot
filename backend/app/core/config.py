@@ -27,6 +27,29 @@ def parse_cors(v: Any) -> list[str] | str:
     raise ValueError(v)
 
 
+def parse_admin_ids(v: Any) -> list[int]:
+    if isinstance(v, list):
+        valid = []
+        for i in v:
+            try:
+                valid.append(int(i))
+            except (ValueError, TypeError):
+                pass
+        return valid
+    if isinstance(v, str) and v:
+        valid = []
+        for i in v.split(","):
+            if i.strip():
+                try:
+                    valid.append(int(i.strip()))
+                except ValueError:
+                    pass
+        return valid
+    if isinstance(v, int):
+        return [v]
+    return []
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Resolve the top-level .env relative to the repository root, not the cwd.
@@ -53,13 +76,24 @@ class Settings(BaseSettings):
     CONVERSATION_DEFAULT_REFLECTIVE_MODE: str = "deep"
     MEMORY_MAX_RETRY_ATTEMPTS: int = 3
     # Number of completed reflective sessions a user may have before the premium boundary is considered.
-    FREE_SESSION_THRESHOLD: int = 3
+    FREE_SESSION_THRESHOLD: int = 1
     # Price in Telegram Stars for premium access.
     PREMIUM_STARS_PRICE: int = 1
+    # Price in KZT for Kaspi payments
+    PREMIUM_KZT_PRICE: int = 3000
     # Interval in days for periodic reflective insight generation.
     INSIGHT_GENERATION_INTERVAL_DAYS: int = 7
     # Interval in hours for periodic reflective insight delivery.
     INSIGHT_DELIVERY_INTERVAL_HOURS: int = 24
+
+    # ApiPay (Kaspi.kz) configuration
+    APIPAY_API_KEY: str | None = None
+    APIPAY_WEBHOOK_SECRET: str | None = None
+    APIPAY_BASE_URL: str = "https://bpapi.bazarbay.site/api/v1"
+    APIPAY_SANDBOX: bool = False
+
+    # List of Telegram user IDs with administrative access
+    ADMIN_IDS: Annotated[list[int], BeforeValidator(parse_admin_ids)] = []
 
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)

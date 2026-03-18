@@ -6,7 +6,13 @@ from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
 
-from app.billing.models import PurchaseIntent, UserAccessState
+from app.billing.models import (
+    FreeSessionEvent,
+    PurchaseIntent,
+    Subscription,
+    UserAccessState,
+)
+from app.models import TelegramSession
 
 
 @dataclass
@@ -27,7 +33,9 @@ class UserBillingContext:
     telegram_user_id: int
     access_tier: str
     free_sessions_used: int
+    first_session_completed: bool
     threshold_reached_at: datetime | None
+    subscription: dict[str, Any] | None = None
     purchase_intents: list[dict] = field(default_factory=list)
 
 
@@ -137,15 +145,25 @@ def get_user_billing_context(
     intents = session.exec(
         select(PurchaseIntent).where(PurchaseIntent.telegram_user_id == telegram_user_id)
     ).all()
+    sub = session.exec(
+        select(Subscription).where(Subscription.telegram_user_id == telegram_user_id)
+    ).first()
 
-    if access is None and not intents:
+    if access is None and not intents and not sub:
         return None
 
     return UserBillingContext(
         telegram_user_id=telegram_user_id,
         access_tier=access.access_tier if access else "unknown",
         free_sessions_used=access.free_sessions_used if access else 0,
+        first_session_completed=access.first_session_completed if access else False,
         threshold_reached_at=access.threshold_reached_at if access else None,
+        subscription={
+            "status": sub.status,
+            "provider_type": sub.provider_type,
+            "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
+            "cancel_at_period_end": sub.cancel_at_period_end,
+        } if sub else None,
         purchase_intents=[
             {
                 "id": str(i.id),
@@ -160,3 +178,34 @@ def get_user_billing_context(
             for i in intents
         ],
     )
+
+
+def get_system_stats(session: Session) -> dict[str, Any]:
+    """Retrieve aggregate system metrics for operators."""
+    from sqlalchemy import func
+
+    now = datetime.now(timezone.utc)
+    day_ago = now - timedelta(days=1)
+
+    stats = {
+        "total_users": session.exec(select(func.count(UserAccessState.id))).one(),
+        "total_sessions": session.exec(select(func.count(TelegramSession.id))).one(),
+        "active_subscriptions": session.exec(
+            select(func.count(Subscription.id)).where(Subscription.status == "active")
+        ).one(),
+        "past_due_subscriptions": session.exec(
+            select(func.count(Subscription.id)).where(Subscription.status == "past_due")
+        ).one(),
+        "recent_sessions_24h": session.exec(
+            select(func.count(TelegramSession.id)).where(
+                TelegramSession.created_at > day_ago
+            )
+        ).one(),
+        "completed_intents_24h": session.exec(
+            select(func.count(PurchaseIntent.id)).where(
+                PurchaseIntent.status == "completed",
+                PurchaseIntent.updated_at > day_ago,
+            )
+        ).one(),
+    }
+    return stats

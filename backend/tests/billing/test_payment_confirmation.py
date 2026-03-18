@@ -2,6 +2,7 @@ import datetime
 import uuid
 from unittest.mock import patch
 
+import pytest
 from sqlmodel import Session
 
 from app.billing.repository import (
@@ -114,7 +115,8 @@ def test_confirm_payment_orphan(db: Session) -> None:
     assert state.access_tier == "premium"
 
 
-def test_handle_successful_payment(db: Session) -> None:
+@pytest.mark.anyio
+async def test_handle_successful_payment(db: Session) -> None:
     test_uuid = str(uuid.uuid4())
     user_id = 4444
     create_purchase_intent(
@@ -138,7 +140,7 @@ def test_handle_successful_payment(db: Session) -> None:
         }
     }
 
-    resp = handle_session_entry(db, update)
+    resp = await handle_session_entry(db, update)
     assert resp.action == "payment_confirmed"
     assert resp.messages[0].text.startswith("Готово")
 
@@ -146,7 +148,8 @@ def test_handle_successful_payment(db: Session) -> None:
     state = get_or_create_user_access_state(db, user_id)
     assert state.access_tier == "premium"
 
-def test_handle_successful_payment_duplicate(db: Session) -> None:
+@pytest.mark.anyio
+async def test_handle_successful_payment_duplicate(db: Session) -> None:
     test_uuid = str(uuid.uuid4())
     user_id = 5555
     create_purchase_intent(
@@ -166,14 +169,15 @@ def test_handle_successful_payment_duplicate(db: Session) -> None:
         }
     }
 
-    resp1 = handle_session_entry(db, update)
+    resp1 = await handle_session_entry(db, update)
     assert resp1.action == "payment_confirmed"
 
-    resp2 = handle_session_entry(db, update)
+    resp2 = await handle_session_entry(db, update)
     assert resp2.action == "payment_confirmed"
 
 
-def test_handle_successful_payment_db_failure(db: Session) -> None:
+@pytest.mark.anyio
+async def test_handle_successful_payment_db_failure(db: Session) -> None:
     user_id = 6666
     update = {
         "message": {
@@ -187,31 +191,33 @@ def test_handle_successful_payment_db_failure(db: Session) -> None:
         }
     }
     with patch("app.conversation.session_bootstrap.confirm_payment_and_upgrade", side_effect=Exception("DB Error")):
-        resp = handle_session_entry(db, update)
+        resp = await handle_session_entry(db, update)
 
     assert resp.action == "payment_confirmation_error"
     assert resp.messages[0].text.startswith("Оплата")
 
-def test_paywall_gate_bypassed_for_premium(db: Session) -> None:
+@pytest.mark.anyio
+async def test_paywall_gate_bypassed_for_premium(db: Session) -> None:
     user_id = 7777
     state = get_or_create_user_access_state(db, user_id)
-    state.threshold_reached_at = datetime.datetime.now(datetime.timezone.utc)
+    state.first_session_completed = True
     state.access_tier = "premium"
     db.add(state)
     db.commit()
 
     msg = IncomingMessage(telegram_user_id=user_id, chat_id=user_id, text="Hello")
-    resp = _handle_message(db, msg)
+    resp = await _handle_message(db, msg)
     assert resp.action != "paywall_gate"
 
-def test_paywall_gate_triggers_for_free(db: Session) -> None:
+@pytest.mark.anyio
+async def test_paywall_gate_triggers_for_free(db: Session) -> None:
     user_id = 8888
     state = get_or_create_user_access_state(db, user_id)
-    state.threshold_reached_at = datetime.datetime.now(datetime.timezone.utc)
+    state.first_session_completed = True
     state.access_tier = "free"
     db.add(state)
     db.commit()
 
     msg = IncomingMessage(telegram_user_id=user_id, chat_id=user_id, text="Hello")
-    resp = _handle_message(db, msg)
+    resp = await _handle_message(db, msg)
     assert resp.action == "paywall_gate"

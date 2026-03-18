@@ -51,12 +51,15 @@ def test_new_user_gets_generic_opening(client: TestClient) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["action"] == "opening_prompt"
-    assert payload["messages"][0]["text"] == OPENING_PROMPT
+    
+    # New user gets OPENING_PROMPT
+    expected_text = OPENING_PROMPT
+    assert payload["messages"][0]["text"] == expected_text
 
-    # Verify both buttons exist
+    # Verify both buttons exist with new brainstorm:mode:* callback data
     callback_datas = [btn["callback_data"] for btn in payload["inline_keyboard"][0]]
-    assert "mode:fast" in callback_datas
-    assert "mode:deep" in callback_datas
+    assert "brainstorm:mode:reflect" in callback_datas
+    assert "brainstorm:mode:brainstorm" in callback_datas
 
 def test_returning_user_gets_continuity_aware_opening(client: TestClient, db: Session) -> None:
     # Arrange: create a session summary to simulate returning user
@@ -110,8 +113,8 @@ def test_returning_user_gets_continuity_aware_opening(client: TestClient, db: Se
 
     # Verify both buttons exist for returning user too
     callback_datas = [btn["callback_data"] for btn in payload["inline_keyboard"][0]]
-    assert "mode:fast" in callback_datas
-    assert "mode:deep" in callback_datas
+    assert "brainstorm:mode:reflect" in callback_datas
+    assert "brainstorm:mode:brainstorm" in callback_datas
 
 def test_error_checking_prior_sessions_fallback_to_generic(client: TestClient, db: Session, monkeypatch) -> None:
     from app.conversation import session_bootstrap
@@ -136,7 +139,10 @@ def test_error_checking_prior_sessions_fallback_to_generic(client: TestClient, d
     assert response.status_code == 200
     payload = response.json()
     assert payload["action"] == "opening_prompt"
-    assert payload["messages"][0]["text"] == OPENING_PROMPT
+    
+    # Fallback uses generic opening
+    expected_text = OPENING_PROMPT
+    assert payload["messages"][0]["text"] == expected_text
 
 def test_returning_user_first_message_uses_memory(client: TestClient, db: Session) -> None:
     # Arrange: create a session summary to simulate returning user

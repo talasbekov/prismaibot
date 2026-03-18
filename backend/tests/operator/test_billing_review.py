@@ -1,13 +1,18 @@
 # backend/tests/operator/test_billing_review.py
 from datetime import datetime, timedelta, timezone
 
-from sqlmodel import Session
+from sqlmodel import Session, delete
 
 from app.billing.models import PurchaseIntent, UserAccessState
 from app.ops.billing_review import get_user_billing_context, list_billing_issues
 
 
 def test_list_billing_issues_empty_on_clean_db(db: Session) -> None:
+    # Clear session-scoped DB leftovers to ensure clean baseline for this test
+    db.execute(delete(PurchaseIntent))
+    db.execute(delete(UserAccessState))
+    db.commit()
+    
     issues = list_billing_issues(db)
     assert issues == []
 

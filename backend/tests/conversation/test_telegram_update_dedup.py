@@ -7,7 +7,8 @@ from sqlmodel import Session
 from app.conversation.session_bootstrap import handle_session_entry
 
 
-def test_duplicate_update_id_is_skipped(db: Session) -> None:
+@pytest.mark.anyio
+async def test_duplicate_update_id_is_skipped(db: Session) -> None:
     """Одинаковый update_id должен обрабатываться только один раз."""
     update = {
         "update_id": 900001,
@@ -18,17 +19,18 @@ def test_duplicate_update_id_is_skipped(db: Session) -> None:
         },
     }
 
-    resp1 = handle_session_entry(db, update)
+    resp1 = await handle_session_entry(db, update)
     db.commit()
     assert resp1.handled is True  # первый раз — обрабатывается
 
-    resp2 = handle_session_entry(db, update)
+    resp2 = await handle_session_entry(db, update)
     db.commit()
     assert resp2.action == "duplicate_skipped"
     assert resp2.handled is False  # второй раз — пропускается
 
 
-def test_different_update_ids_processed_independently(db: Session) -> None:
+@pytest.mark.anyio
+async def test_different_update_ids_processed_independently(db: Session) -> None:
     """Разные update_id обрабатываются независимо."""
     base_msg = {
         "message": {
@@ -37,16 +39,17 @@ def test_different_update_ids_processed_independently(db: Session) -> None:
             "text": "/start",
         }
     }
-    resp1 = handle_session_entry(db, {"update_id": 900010, **base_msg})
+    resp1 = await handle_session_entry(db, {"update_id": 900010, **base_msg})
     db.commit()
-    resp2 = handle_session_entry(db, {"update_id": 900011, **base_msg})
+    resp2 = await handle_session_entry(db, {"update_id": 900011, **base_msg})
     db.commit()
 
     assert resp1.action != "duplicate_skipped"
     assert resp2.action != "duplicate_skipped"
 
 
-def test_update_without_update_id_processed_normally(db: Session) -> None:
+@pytest.mark.anyio
+async def test_update_without_update_id_processed_normally(db: Session) -> None:
     """Update без update_id обрабатывается нормально (backward compatibility)."""
     update = {
         "message": {
@@ -55,13 +58,14 @@ def test_update_without_update_id_processed_normally(db: Session) -> None:
             "text": "/start",
         }
     }
-    resp = handle_session_entry(db, update)
+    resp = await handle_session_entry(db, update)
     db.commit()
     assert resp.action != "duplicate_skipped"
     assert resp.handled is True
 
 
-def test_dedup_race_condition_returns_skipped(db: Session) -> None:
+@pytest.mark.anyio
+async def test_dedup_race_condition_returns_skipped(db: Session) -> None:
     """Race condition (IntegrityError при flush) должен возвращать duplicate_skipped."""
     update = {
         "update_id": 900050,
@@ -77,13 +81,14 @@ def test_dedup_race_condition_returns_skipped(db: Session) -> None:
     mock_session.get.return_value = None  # Не в базе
     mock_session.flush.side_effect = IntegrityError("race", params={}, orig=None)
     
-    resp = handle_session_entry(mock_session, update)
+    resp = await handle_session_entry(mock_session, update)
     
     assert resp.action == "duplicate_skipped"
     mock_session.rollback.assert_called_once()
 
 
-def test_dedup_failure_proceeds_normally(db: Session) -> None:
+@pytest.mark.anyio
+async def test_dedup_failure_proceeds_normally(db: Session) -> None:
     """Если dedup слой падает с ошибкой, обработка должна продолжаться (AC 5)."""
     update = {
         "update_id": 900060,
@@ -102,7 +107,7 @@ def test_dedup_failure_proceeds_normally(db: Session) -> None:
     # Или просто проверить, что мы вышли из блока дедупликации.
     # В handle_session_entry после дедупликации идет обращение к message['pre_checkout_query'] и т.д.
     
-    resp = handle_session_entry(mock_session, update)
+    resp = await handle_session_entry(mock_session, update)
     
     # Должен продолжить и попытаться найти/создать сессию
     assert resp.action != "duplicate_skipped"

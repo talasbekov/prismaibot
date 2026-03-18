@@ -591,14 +591,16 @@ Keep the feature set narrow, allow operational workflows to remain manual, and r
 
 ### Subscription, Access & Billing
 
-- FR21: Product can allow limited free usage before paid access is required.
-- FR22: Product can enforce a paywall after the defined free-usage threshold is reached.
-- FR23: User can unlock paid access through a supported payment flow.
-- FR24: Product can recognize successful and failed payments and update access accordingly.
-- FR25: User can view their current subscription or access status.
-- FR26: User can request cancellation or non-renewal of paid access.
-- FR27: Product can preserve continuity and premium access distinctions across free and paid usage states.
-- FR28: User can understand access limits and paid-access benefits when free usage is exhausted.
+- **FR21:** Пользователю предоставляется **один полный цикл** (рефлексия или брейншторм) бесплатно, чтобы он мог полностью ощутить ценность продукта.
+- **FR22:** Пейволл (Paywall) срабатывает при попытке начать **вторую сессию** после завершения первого полного цикла.
+- **FR23:** Пользователь может оформить **ежемесячную подписку (3000 тг)** с автопродлением через поддерживаемую платежную систему.
+- **FR24:** Система корректно обрабатывает успешные и неудачные платежи, обновляя статус доступа.
+- **FR25:** Пользователь может видеть текущий статус своей подписки и дату следующего списания.
+- **FR26:** Пользователь может отменить подписку; в этом случае **доступ остается активным до конца оплаченного 30-дневного периода**.
+- **FR27:** Продукт сохраняет непрерывность данных (continuity) и Premium-функции (память) при переходе между состояниями подписки.
+- **FR28:** Ограничения бесплатного доступа и ценность Premium (безлимит и память) четко коммуницируются пользователю.
+- **FR44:** Система автоматически обрабатывает продление подписки (рекуррентные платежи) через адаптер платежного провайдера.
+- **FR45:** Система предоставляет **льготный период (Grace Period) — 1 день (24 часа)** для неудачных продлений, прежде чем Premium-доступ будет ограничен.
 
 ### Retention & Ongoing Engagement
 

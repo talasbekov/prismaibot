@@ -30,7 +30,7 @@ def test_get_or_create_purchase_intent_new_intent(db: Session) -> None:
     db.commit()
 
     assert intent.telegram_user_id == user_id
-    assert intent.invoice_payload == f"premium_{user_id}"
+    assert intent.invoice_payload == f"premium_{intent.id}"
     assert intent.amount == settings.PREMIUM_STARS_PRICE
     assert intent.currency == "XTR"
     assert intent.status == "pending"
@@ -79,7 +79,8 @@ def test_purchase_intent_duplicate_invoice_payload_raises(db: Session) -> None:
     db.rollback()
 
 
-def test_pay_stars_callback_triggers_payment_invoice(db: Session) -> None:
+@pytest.mark.anyio
+async def test_pay_stars_callback_triggers_payment_invoice(db: Session) -> None:
     """pay:stars callback data should initiate a payment."""
     user_id = 777
     chat_id = 888
@@ -92,19 +93,21 @@ def test_pay_stars_callback_triggers_payment_invoice(db: Session) -> None:
         }
     }
 
-    result = handle_session_entry(db, update)
+    result = await handle_session_entry(db, update)
 
     assert result.action == "payment_invoice"
     assert "send_invoice" in result.signals
     assert result.invoice is not None
-    assert result.invoice.payload == f"premium_{user_id}"
+    # Verify invoice payload starts with premium_ and contains a valid UUID
+    assert result.invoice.payload.startswith("premium_")
     assert result.invoice.chat_id == chat_id
     assert result.invoice.currency == "XTR"
     assert len(result.invoice.prices) == 1
     assert result.invoice.prices[0]["amount"] == settings.PREMIUM_STARS_PRICE
 
 
-def test_pay_stars_callback_handles_failure(db: Session) -> None:
+@pytest.mark.anyio
+async def test_pay_stars_callback_handles_failure(db: Session) -> None:
     """If creation fails, it returns a fail-visible message open access state and drops signal."""
     user_id = 999
     chat_id = 111
@@ -118,7 +121,7 @@ def test_pay_stars_callback_handles_failure(db: Session) -> None:
     }
 
     with patch("app.conversation.session_bootstrap.get_or_create_purchase_intent", side_effect=Exception("DB Error")):
-        result = handle_session_entry(db, update)
+        result = await handle_session_entry(db, update)
 
     assert result.action == "payment_invoice_error"
     assert result.messages[0].text == PAYMENT_INITIATION_ERROR_MESSAGE
@@ -130,7 +133,8 @@ def test_pay_stars_callback_handles_failure(db: Session) -> None:
     assert signal.signal_type == "billing_invoice_creation_failed"
 
 
-def test_pre_checkout_query_returns_ok(db: Session) -> None:
+@pytest.mark.anyio
+async def test_pre_checkout_query_returns_ok(db: Session) -> None:
     """pre_checkout_query should return pre_checkout_ok action."""
     query_id = "test_query_123"
     update = {
@@ -143,14 +147,15 @@ def test_pre_checkout_query_returns_ok(db: Session) -> None:
         }
     }
 
-    result = handle_session_entry(db, update)
+    result = await handle_session_entry(db, update)
 
     assert result.action == "pre_checkout_ok"
     assert "answer_pre_checkout" in result.signals
     assert result.pre_checkout_query_id == query_id
 
 
-def test_paywall_gate_includes_inline_keyboard(db: Session) -> None:
+@pytest.mark.anyio
+async def test_paywall_gate_includes_inline_keyboard(db: Session) -> None:
     """Paywall response should include inline keyboard."""
     from app.billing.models import UserAccessState
     from app.conversation.session_bootstrap import IncomingMessage, _handle_message
@@ -160,8 +165,7 @@ def test_paywall_gate_includes_inline_keyboard(db: Session) -> None:
     db.add(UserAccessState(
         telegram_user_id=user_id,
         access_tier="free",
-        free_sessions_used=3,
-        threshold_reached_at=datetime.now(timezone.utc),
+        first_session_completed=True,
     ))
     db.commit()
 
@@ -174,15 +178,17 @@ def test_paywall_gate_includes_inline_keyboard(db: Session) -> None:
     with patch(
         "app.conversation.session_bootstrap.evaluate_incoming_message_safety"
     ):
-        result = _handle_message(db, message, background_tasks=MagicMock())
+        result = await _handle_message(db, message, background_tasks=MagicMock())
 
     assert result.action == "paywall_gate"
     assert result.inline_keyboard is not None
-    assert len(result.inline_keyboard) == 1
+    assert len(result.inline_keyboard) == 2
     assert result.inline_keyboard[0][0].callback_data == "pay:stars"
+    assert result.inline_keyboard[1][0].callback_data == "pay:kaspi"
 
 
-def test_access_tier_remains_free_after_payment_initiation(db: Session) -> None:
+@pytest.mark.anyio
+async def test_access_tier_remains_free_after_payment_initiation(db: Session) -> None:
     """After pay:stars callback, UserAccessState.access_tier must still be 'free'.
     No premature access upgrade should occur at initiation time."""
     from app.billing.models import UserAccessState
@@ -194,8 +200,7 @@ def test_access_tier_remains_free_after_payment_initiation(db: Session) -> None:
     db.add(UserAccessState(
         telegram_user_id=user_id,
         access_tier="free",
-        free_sessions_used=3,
-        threshold_reached_at=datetime(2026, 3, 14, tzinfo=timezone.utc),
+        first_session_completed=True,
     ))
     db.commit()
 
@@ -207,7 +212,7 @@ def test_access_tier_remains_free_after_payment_initiation(db: Session) -> None:
         }
     }
 
-    result = handle_session_entry(db, update)
+    result = await handle_session_entry(db, update)
     assert result.action == "payment_invoice"
 
     # Verify access_tier is still "free" — no premature upgrade

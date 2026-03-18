@@ -1,6 +1,5 @@
-# generated: 2026-03-12
-# last_updated: 2026-03-15
-# last_story_created: 6-6-idempotent-handling-of-duplicate-or-repeated-service-events
+# generated: 2026-03-18
+# last_updated: 2026-03-18
 # project: goals
 # project_key: NOKEY
 # tracking_system: file-system
@@ -27,22 +26,16 @@
 # Retrospective Status:
 #   - optional: Can be completed but not required
 #   - done: Retrospective has been completed
-#
-# WORKFLOW NOTES:
-# ===============
-# - Epic transitions to 'in-progress' automatically when first story is created
-# - Stories can be worked in parallel if team capacity allows
-# - SM typically creates next story after previous one is 'done' to incorporate learnings
-# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-14
+generated: 2026-03-18
+last_updated: 2026-03-18
 project: goals
 project_key: NOKEY
 tracking_system: file-system
 story_location: /home/erda/Музыка/goals/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-starter-template-telegram-backend: done
   1-1a-basic-cicd-staging-and-migration-safe-deployment-path: done
   1-2-telegram-session-entry: done
@@ -50,17 +43,17 @@ development_status:
   1-4-first-trust-making-response-with-situation-reflection: done
   1-5-clarification-and-breakdown-of-facts-emotions-and-interpretations: done
   1-6-session-closure-with-takeaway-and-next-step-options: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
-  epic-2: in-progress
+  epic-2: done
   2-1-session-summary-generation-after-session-completion: done
   2-2-durable-memory-without-long-term-raw-transcript-storage: done
   2-3-using-prior-memory-at-the-start-of-a-new-session: done
   2-4-tentative-memory-recall-and-user-correction: done
   2-5-conservative-memory-promotion-and-safe-handling-of-sensitive-context: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
-  epic-3: in-progress
+  epic-3: done
   3-1-detection-of-red-flag-signals-in-user-messages: done
   3-2-switching-from-normal-flow-to-crisis-aware-escalation-flow: done
   3-3-human-escalation-messaging-and-explanation-of-product-boundaries: done
@@ -68,29 +61,40 @@ development_status:
   3-5-operator-alerting-without-routine-exposure-to-content: done
   3-6-controlled-investigation-path-for-critical-safety-incidents: done
   3-7-graceful-step-down-after-false-positive-escalation: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
 
-  epic-4: in-progress
-  4-1-limited-free-usage-and-usage-threshold-tracking: done
-  4-2-paywall-after-felt-value-with-continuity-based-framing: done
-  4-3-starting-a-supported-payment-flow-for-premium-access: done
-  4-4-handling-payment-events-and-updating-access-state: done
-  4-5-viewing-current-access-subscription-status: done
-  4-6-request-cancellation-or-non-renewal-of-paid-access: done
-  4-7-continuity-across-free-and-paid-states: done
+  epic-4: done
+  4-1-limit-na-odin-besplatnyj-cikl-i-uchet-sessij: done
+  4-2-pejvoll-s-akcentom-na-bezlimit-i-nepreryvnost-continuity: done
+  4-3-zapusk-i-vybor-ezhemesyachnoj-podpiski-3000-tg: done
+  4-4-obrabotka-avtoprodlenij-spisanij-i-lgotnogo-perioda-grace-period: done
+  4-5-prosmotr-statusa-podpiski-i-daty-prodleniya: done
+  4-6-otmena-podpiski-i-sohranenie-dostupa-do-konca-perioda: done
   epic-4-retrospective: optional
 
-  epic-5: in-progress
+  epic-5: done
   5-1-periodic-reflective-insight-generation-based-on-prior-sessions: done
   5-2-weekly-insight-delivery-without-manually-starting-a-session: done
   5-3-repeat-use-experience-outside-acute-conflict-moments: done
-  epic-5-retrospective: optional
+  epic-5-retrospective: done
 
-  epic-6: in-progress
+  epic-6: done
   6-1-request-for-user-data-deletion: done
   6-2-execute-deletion-workflow-and-remove-retained-memory-artifacts: done
   6-3-health-visibility-and-basic-service-monitoring: done
   6-4-operator-monitoring-of-key-operational-signals: done
   6-5-review-payment-issues-and-subscription-state-problems: done
-  6-6-idempotent-handling-of-duplicate-or-repeated-service-events: review
-  epic-6-retrospective: optional
+  6-6-idempotent-handling-of-duplicate-or-repeated-service-events: done
+  epic-6-retrospective: done
+
+  epic-7: done
+  7-1-apipay-config-and-client-setup: done
+  7-2-telegram-phone-number-collection: done
+  7-3-apipay-invoice-initiation: done
+  7-4-apipay-webhook-handling: done
+  7-5-apipay-recurring-subscriptions: done
+  7-6-basic-telegram-admin-interface-and-auth: done
+  7-7-admin-stats-and-monitoring: done
+  7-8-admin-subscription-management: done
+  7-9-admin-safety-alert-investigation-path: done
+  epic-7-retrospective: done

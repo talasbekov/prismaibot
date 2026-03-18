@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from app.conversation._openai import call_chat
+from app.conversation._openai import async_call_chat
 from app.conversation.brainstorming.prompts import (
     APPROACH_PROMPTS,
     APPROACH_LABELS,
@@ -34,7 +34,7 @@ class BrainstormResult:
     inline_keyboard: list[list[dict]] = field(default_factory=list)
 
 
-def route(session_record: "TelegramSession", user_text: str) -> BrainstormResult:
+async def route(session_record: "TelegramSession", user_text: str) -> BrainstormResult:
     """Dispatch to the handler for the current brainstorm_phase."""
     phase = session_record.brainstorm_phase
     data: dict = dict(session_record.brainstorm_data or {})
@@ -61,7 +61,7 @@ def route(session_record: "TelegramSession", user_text: str) -> BrainstormResult
             updated_data=data,
         )
 
-    return handler(user_text, data, session_record)
+    return await handler(user_text, data, session_record)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -73,10 +73,10 @@ def _short_input(text: str) -> bool:
     return len(text.split()) < _MIN_WORDS_COLLECT
 
 
-def _ask_openai(phase: str, user_text: str, extra_context: str = "") -> str | None:
+async def _ask_openai(phase: str, user_text: str, extra_context: str = "") -> str | None:
     system = SYSTEM_PROMPTS.get(phase, "")
     user_prompt = f"{extra_context}\n\nПользователь: {user_text}".strip() if extra_context else user_text
-    return call_chat(
+    return await async_call_chat(
         [
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
@@ -86,7 +86,7 @@ def _ask_openai(phase: str, user_text: str, extra_context: str = "") -> str | No
     )
 
 
-def _handle_collect_topic(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_collect_topic(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     if _short_input(user_text):
         return BrainstormResult(
             messages=("Напиши чуть подробнее — хотя бы пару слов о том, что хочешь решить или придумать.",),
@@ -95,7 +95,7 @@ def _handle_collect_topic(user_text: str, data: dict, _sr: "TelegramSession") ->
             updated_data=data,
         )
     data["topic"] = user_text
-    reply = _ask_openai("collect_goal", user_text, f"Тема: {user_text}") or FALLBACKS["collect_goal"]
+    reply = await _ask_openai("collect_goal", user_text, f"Тема: {user_text}") or FALLBACKS["collect_goal"]
     return BrainstormResult(
         messages=(reply,),
         action="brainstorm_collect_topic",
@@ -104,7 +104,7 @@ def _handle_collect_topic(user_text: str, data: dict, _sr: "TelegramSession") ->
     )
 
 
-def _handle_collect_goal(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_collect_goal(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     if _short_input(user_text):
         return BrainstormResult(
             messages=("Расскажи чуть подробнее — какой результат ты хочешь получить?",),
@@ -114,7 +114,7 @@ def _handle_collect_goal(user_text: str, data: dict, _sr: "TelegramSession") -> 
         )
     data["goal"] = user_text
     context = f"Тема: {data.get('topic', '')}\nЦель: {user_text}"
-    reply = _ask_openai("collect_constraints", user_text, context) or FALLBACKS["collect_constraints"]
+    reply = await _ask_openai("collect_constraints", user_text, context) or FALLBACKS["collect_constraints"]
     return BrainstormResult(
         messages=(reply,),
         action="brainstorm_collect_goal",
@@ -123,7 +123,7 @@ def _handle_collect_goal(user_text: str, data: dict, _sr: "TelegramSession") -> 
     )
 
 
-def _handle_collect_constraints(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_collect_constraints(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     if _short_input(user_text):
         return BrainstormResult(
             messages=("Расскажи подробнее — время, бюджет, что уже пробовал?",),
@@ -149,7 +149,7 @@ def _handle_collect_constraints(user_text: str, data: dict, _sr: "TelegramSessio
     )
 
 
-def _handle_choose_approach(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_choose_approach(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     # Text message while waiting for approach button — repeat the buttons
     keyboard = [[
         {"text": label, "callback_data": f"brainstorm:approach:{key}"}
@@ -164,7 +164,7 @@ def _handle_choose_approach(user_text: str, data: dict, _sr: "TelegramSession") 
     )
 
 
-def _handle_facilitation_loop(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_facilitation_loop(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     ideas: list[str] = list(data.get("ideas", []))
     ideas.append(user_text)
     if len(ideas) > _MAX_IDEAS:
@@ -177,7 +177,7 @@ def _handle_facilitation_loop(user_text: str, data: dict, _sr: "TelegramSession"
     approach = data.get("approach", "ideas")
     system = APPROACH_PROMPTS.get(approach, SYSTEM_PROMPTS["facilitation_loop"])
     context = f"Тема: {data.get('topic', '')}\nУже назвал: {len(ideas)} идей"
-    reply = call_chat(
+    reply = await async_call_chat(
         [
             {"role": "system", "content": system},
             {"role": "user", "content": f"{context}\n\nПоследняя идея: {user_text}"},
@@ -200,10 +200,10 @@ def _handle_facilitation_loop(user_text: str, data: dict, _sr: "TelegramSession"
     )
 
 
-def _handle_cluster_ideas(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_cluster_ideas(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     ideas_text = "\n".join(f"- {idea}" for idea in data.get("ideas", []))
     context = f"Тема: {data.get('topic', '')}\nВсе идеи:\n{ideas_text}"
-    reply = _ask_openai("cluster_ideas", user_text, context) or FALLBACKS["prioritize"]
+    reply = await _ask_openai("cluster_ideas", user_text, context) or FALLBACKS["prioritize"]
     return BrainstormResult(
         messages=(reply,),
         action="brainstorm_cluster_ideas",
@@ -212,10 +212,10 @@ def _handle_cluster_ideas(user_text: str, data: dict, _sr: "TelegramSession") ->
     )
 
 
-def _handle_prioritize(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_prioritize(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     ideas_text = "\n".join(f"- {idea}" for idea in data.get("ideas", []))
     context = f"Тема: {data.get('topic', '')}\nВсе идеи:\n{ideas_text}"
-    reply = _ask_openai("prioritize", user_text, context) or FALLBACKS["generate_action_plan"]
+    reply = await _ask_openai("prioritize", user_text, context) or FALLBACKS["generate_action_plan"]
     # Store raw OpenAI text — don't parse
     data["top3_text"] = reply
     return BrainstormResult(
@@ -226,13 +226,13 @@ def _handle_prioritize(user_text: str, data: dict, _sr: "TelegramSession") -> Br
     )
 
 
-def _handle_generate_action_plan(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
+async def _handle_generate_action_plan(user_text: str, data: dict, _sr: "TelegramSession") -> BrainstormResult:
     context = (
         f"Тема: {data.get('topic', '')}\n"
         f"Топ-3 идеи: {data.get('top3_text', '')}\n"
         f"Ограничения: {data.get('constraints', '')}"
     )
-    reply = _ask_openai("generate_action_plan", user_text, context) or FALLBACKS["finish"]
+    reply = await _ask_openai("generate_action_plan", user_text, context) or FALLBACKS["finish"]
     data["action_plan"] = reply
     return BrainstormResult(
         messages=(reply,),
@@ -242,7 +242,7 @@ def _handle_generate_action_plan(user_text: str, data: dict, _sr: "TelegramSessi
     )
 
 
-def _handle_finish(user_text: str, data: dict, session_record: "TelegramSession") -> BrainstormResult:
+async def _handle_finish(user_text: str, data: dict, session_record: "TelegramSession") -> BrainstormResult:
     ideas = data.get("ideas", [])
     top3 = data.get("top3_text", "")
     plan = data.get("action_plan", "")

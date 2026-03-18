@@ -32,7 +32,7 @@ def test_get_or_create_creates_new_record_with_defaults(db: Session) -> None:
     assert state.telegram_user_id == user_id
     assert state.access_tier == "free"
     assert state.free_sessions_used == 0
-    assert state.threshold_reached_at is None
+    assert state.first_session_completed is False
 
 
 def test_get_or_create_returns_existing_record_on_second_call(db: Session) -> None:
@@ -61,7 +61,8 @@ def test_first_call_increments_free_sessions_used(db: Session) -> None:
         select(UserAccessState).where(UserAccessState.telegram_user_id == user_id)
     ).one()
     assert state.free_sessions_used == 1
-    assert state.threshold_reached_at is None
+    assert state.first_session_completed is True
+    assert state.threshold_reached_at is not None
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +122,10 @@ def test_threshold_not_reached_one_below_limit(db: Session) -> None:
     user_id = 80021
     threshold = settings.FREE_SESSION_THRESHOLD
 
+    # Ensure state exists even if loop runs 0 times
+    repository.get_or_create_user_access_state(db, user_id)
+    db.commit()
+
     for _ in range(threshold - 1):
         service.record_eligible_session_completion(
             db, telegram_user_id=user_id, session_id=uuid.uuid4()
@@ -131,7 +136,7 @@ def test_threshold_not_reached_one_below_limit(db: Session) -> None:
         select(UserAccessState).where(UserAccessState.telegram_user_id == user_id)
     ).one()
     assert state.free_sessions_used == threshold - 1
-    assert state.threshold_reached_at is None
+    assert state.first_session_completed is False
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +192,8 @@ def _clear_session_tables(db: Session) -> None:
     db.commit()
 
 
-def test_session_closure_triggers_free_usage_recording(db: Session) -> None:
+@pytest.mark.anyio
+async def test_session_closure_triggers_free_usage_recording(db: Session) -> None:
     """Closing a session must create a FreeSessionEvent and increment the counter."""
     from app.conversation.closure import ClosureResponse
     from app.conversation.session_bootstrap import IncomingMessage, _handle_message
@@ -234,27 +240,29 @@ def test_session_closure_triggers_free_usage_recording(db: Session) -> None:
             return_value=mock_safety,
         ),
         patch(
-            "app.conversation.session_bootstrap._compose_session_closure",
+            "app.conversation.closure.compose_session_closure",
             return_value=mock_closure,
         ),
         patch(
             "app.conversation.session_bootstrap.schedule_session_summary_generation"
         ),
         patch(
-            "app.conversation.session_bootstrap.derive_allowed_profile_facts",
+            "app.memory.derive_allowed_profile_facts",
             return_value=[],
         ),
     ):
-        _handle_message(db, message)
+        await _handle_message(db, message)
 
     state = db.exec(
         select(UserAccessState).where(UserAccessState.telegram_user_id == user_id)
     ).first()
     assert state is not None, "UserAccessState must be created after session closure"
     assert state.free_sessions_used == 1
+    assert state.first_session_completed is True
 
 
-def test_non_closing_turn_does_not_trigger_billing(db: Session) -> None:
+@pytest.mark.anyio
+async def test_non_closing_turn_does_not_trigger_billing(db: Session) -> None:
     """A turn that does not close the session must NOT create a FreeSessionEvent."""
     from app.conversation.first_response import FirstTrustResponse
     from app.conversation.session_bootstrap import IncomingMessage, _handle_message
@@ -298,7 +306,7 @@ def test_non_closing_turn_does_not_trigger_billing(db: Session) -> None:
             return_value=mock_safety,
         ),
         patch(
-            "app.conversation.session_bootstrap._compose_first_trust_response",
+            "app.conversation.first_response.compose_first_trust_response_with_memory",
             return_value=mock_first,
         ),
         patch(
@@ -310,7 +318,7 @@ def test_non_closing_turn_does_not_trigger_billing(db: Session) -> None:
             return_value="context",
         ),
     ):
-        _handle_message(db, message)
+        await _handle_message(db, message)
 
     state = db.exec(
         select(UserAccessState).where(UserAccessState.telegram_user_id == user_id)
@@ -323,7 +331,8 @@ def test_non_closing_turn_does_not_trigger_billing(db: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_billing_failure_records_ops_signal_and_does_not_raise(db: Session) -> None:
+@pytest.mark.anyio
+async def test_billing_failure_records_ops_signal_and_does_not_raise(db: Session) -> None:
     """If record_eligible_session_completion raises, session closure still succeeds
     and an ops signal of type 'billing_free_usage_record_failed' is recorded."""
     from app.conversation.closure import ClosureResponse
@@ -370,14 +379,14 @@ def test_billing_failure_records_ops_signal_and_does_not_raise(db: Session) -> N
             return_value=mock_safety,
         ),
         patch(
-            "app.conversation.session_bootstrap._compose_session_closure",
+            "app.conversation.closure.compose_session_closure",
             return_value=mock_closure,
         ),
         patch(
             "app.conversation.session_bootstrap.schedule_session_summary_generation"
         ),
         patch(
-            "app.conversation.session_bootstrap.derive_allowed_profile_facts",
+            "app.memory.derive_allowed_profile_facts",
             return_value=[],
         ),
         patch(
@@ -385,7 +394,7 @@ def test_billing_failure_records_ops_signal_and_does_not_raise(db: Session) -> N
             side_effect=RuntimeError("simulated billing DB failure"),
         ),
     ):
-        result = _handle_message(db, message, background_tasks=MagicMock())
+        result = await _handle_message(db, message, background_tasks=MagicMock())
 
     # Session closure must succeed despite billing failure
     assert result is not None

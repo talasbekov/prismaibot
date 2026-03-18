@@ -1,6 +1,6 @@
 # Story 6.6: Idempotent handling of duplicate or repeated service events
 
-Status: review
+Status: done
 
 ## Story
 

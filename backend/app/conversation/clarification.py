@@ -253,11 +253,7 @@ def compose_clarification_response(
             action="clarification_turn",
             messages=(
                 f"💬 {_build_low_confidence_reflection(signals=signals)}",
-                f"🤔 {_build_follow_up_question(
-                    reflective_mode,
-                    low_confidence=True,
-                    signals=signals,
-                )}",
+                f"🤔 {_build_follow_up_question(reflective_mode, low_confidence=True, signals=signals)}",
             ),
             updated_context=combined_context,
         )
@@ -270,11 +266,7 @@ def compose_clarification_response(
         action="clarification_turn",
         messages=(
             synthesis,
-            f"🤔 {_build_follow_up_question(
-                reflective_mode,
-                low_confidence=False,
-                signals=signals,
-            )}",
+            f"🤔 {_build_follow_up_question(reflective_mode, low_confidence=False, signals=signals)}",
         ),
         updated_context=combined_context,
     )

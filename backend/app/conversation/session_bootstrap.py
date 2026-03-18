@@ -26,6 +26,8 @@ from app.billing.service import (
     confirm_payment_and_upgrade,
     get_or_create_purchase_intent,
     get_user_access_state,
+    has_premium_access,
+    initiate_kaspi_payment,
     is_free_eligible,
     process_cancellation_request,
     record_eligible_session_completion,
@@ -66,10 +68,19 @@ CrisisState = Literal["normal", "crisis_active", "step_down_pending"]
 MAX_USER_MESSAGE_LENGTH = 2000
 
 OPENING_PROMPT = (
-    "🌀 *Prism AI* — пространство для рефлексии\n\n"
-    "Привет! Я помогу увидеть ситуацию с разных сторон — "
-    "без советов и оценок, через вопросы.\n\n"
-    "👇 Выбери, с чего начать, или просто напиши, что случилось:"
+    "🌀 Prism AI\n\n"
+    "Иногда мысли в голове превращаются в хаос 🧠💭\n\n"
+    "Здесь можно:\n"
+    "• 🔎 разобраться в ситуации\n"
+    "• 🧩 разложить мысли по полочкам\n"
+    "• 💡 найти решение\n\n"
+    "Я не даю готовых советов.\n"
+    "Я задаю вопросы, которые помогают посмотреть на ситуацию с разных сторон и найти выход.\n\n"
+    "Чаще всего люди приходят сюда, когда:\n\n"
+    "• 🤔 не знают, какое решение принять\n"
+    "• 🌪 запутались в мыслях\n"
+    "• 💬 хотят спокойно проговорить проблему\n\n"
+    "_Если тебе сейчас очень плохо — просто напиши об этом, я не начну с вопросов._"
 )
 RETURNING_USER_OPENING_PROMPT = (
     "👋 *Рад, что вернулся!*\n\n"
@@ -126,6 +137,17 @@ class InlineButton(BaseModel):
         return self
 
 
+class ReplyButton(BaseModel):
+    text: str
+    request_contact: bool = False
+
+
+class ReplyKeyboardMarkup(BaseModel):
+    keyboard: list[list[ReplyButton]]
+    resize_keyboard: bool = True
+    one_time_keyboard: bool = True
+
+
 class InvoiceData(BaseModel):
     title: str
     description: str
@@ -143,15 +165,25 @@ class TelegramWebhookResponse(BaseModel):
     signals: list[str] = Field(default_factory=list)
     messages: list[TelegramMessageOut] = Field(default_factory=list)
     inline_keyboard: list[list[InlineButton]] = Field(default_factory=list)
+    reply_markup: ReplyKeyboardMarkup | None = None
     invoice: InvoiceData | None = None
     pre_checkout_query_id: str | None = None
 
 
 @dataclass(frozen=True)
+class TelegramContact:
+    phone_number: str
+    first_name: str
+    last_name: str | None = None
+    user_id: int | None = None
+
+
+@dataclass
 class IncomingMessage:
     telegram_user_id: int
     chat_id: int
     text: str
+    contact: TelegramContact | None = None
 
 
 def _is_update_already_processed(session: Session, update_id: int) -> bool:
@@ -162,7 +194,7 @@ def _record_processed_update(session: Session, update_id: int) -> None:
     session.add(ProcessedTelegramUpdate(update_id=update_id))
 
 
-def handle_session_entry(
+async def handle_session_entry(
     session: Session,
     update: dict[str, Any],
     *,
@@ -204,20 +236,20 @@ def handle_session_entry(
             callback_data = cbq.get("data", "")
             if callback_data == "pay:stars":
                 return _handle_payment_initiation(session, cbq)
+            if callback_data == "pay:kaspi":
+                return _handle_kaspi_payment_initiation(session, cbq)
+            if callback_data.startswith("admin:"):
+                return await _handle_admin_callback(session, cbq)
             if callback_data.startswith("brainstorm:mode:"):
-                return _handle_brainstorm_mode_callback(session, cbq)
+                return await _handle_brainstorm_mode_callback(session, cbq)
             if callback_data.startswith("brainstorm:approach:"):
-                return _handle_brainstorm_approach_callback(session, cbq)
+                return await _handle_brainstorm_approach_callback(session, cbq)
 
         mode_callback = _parse_mode_callback(update)
         if mode_callback is not None:
-            return _handle_mode_selection_callback(session, *mode_callback)
-        return TelegramWebhookResponse(
-            status="ignored",
-            action="ignored",
-            handled=False,
-        )
+            return await _handle_mode_selection_callback(session, *mode_callback)
 
+    # Standard message parsing and handling
     message = _parse_message(update)
     if message is None:
         return TelegramWebhookResponse(
@@ -235,7 +267,12 @@ def handle_session_entry(
         )
 
     if message.text.strip() == "/cancel":
-        return _handle_cancel_command(
+        return await _handle_cancel_command(
+            session, message.telegram_user_id, message.chat_id
+        )
+
+    if message.text.strip() == "/admin":
+        return _handle_admin_command(
             session, message.telegram_user_id, message.chat_id
         )
 
@@ -244,8 +281,17 @@ def handle_session_entry(
             session, message.telegram_user_id
         )
 
+    # --- ADMIN TEXT LOOKUP (Story 7.8) ---
+    from app.bot.utils import is_admin
+    stripped_text = message.text.strip()
+    if is_admin(message.telegram_user_id) and stripped_text.isdigit() and len(stripped_text) >= 5:
+        # If admin sends a long number, treat it as a lookup request
+        cbq_mock = {"from": {"id": message.telegram_user_id}, "data": f"admin:lookup_user_id:{stripped_text}"}
+        return await _handle_admin_callback(session, cbq_mock)
+    # --- END ADMIN TEXT LOOKUP ---
+
     try:
-        return _handle_message(session, message, background_tasks=background_tasks)
+        return await _handle_message(session, message, background_tasks=background_tasks)
     except Exception:
         logger.exception(
             "Unhandled error in session entry for telegram_user_id=%s",
@@ -257,6 +303,39 @@ def handle_session_entry(
             handled=False,
             messages=[TelegramMessageOut(text=SESSION_BOOTSTRAP_ERROR_PROMPT)],
         )
+
+
+def _handle_kaspi_payment_initiation(
+    session: Session, callback_query: dict[str, Any]
+) -> TelegramWebhookResponse:
+    from_field = callback_query.get("from")
+    message_field = callback_query.get("message")
+    if not isinstance(from_field, dict) or not isinstance(message_field, dict):
+        return TelegramWebhookResponse(status="error", action="payment_invoice_error", handled=False)
+
+    chat_field = message_field.get("chat")
+    if not isinstance(chat_field, dict):
+        return TelegramWebhookResponse(status="error", action="payment_invoice_error", handled=False)
+
+    telegram_user_id = from_field.get("id")
+    chat_id = chat_field.get("id")
+
+    if not isinstance(telegram_user_id, int) or not isinstance(chat_id, int):
+        return TelegramWebhookResponse(status="error", action="payment_invoice_error", handled=False)
+
+    from app.billing.prompts import KASPI_PHONE_REQUEST_MESSAGE
+    
+    return TelegramWebhookResponse(
+        status="ok",
+        action="request_contact",
+        handled=True,
+        messages=[TelegramMessageOut(text=KASPI_PHONE_REQUEST_MESSAGE)],
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [ReplyButton(text="📱 Отправить номер для Kaspi", request_contact=True)]
+            ]
+        )
+    )
 
 
 def _handle_payment_initiation(
@@ -345,8 +424,7 @@ def _handle_status_command(
     session: Session, telegram_user_id: int, chat_id: int
 ) -> TelegramWebhookResponse:
     try:
-        state = get_user_access_state(session, telegram_user_id)
-        text, inline_keyboard = build_status_response(state)
+        text, inline_keyboard = build_status_response(session, telegram_user_id)
 
         return TelegramWebhookResponse(
             status="ok",
@@ -390,11 +468,210 @@ def _handle_status_command(
         )
 
 
-def _handle_cancel_command(
+def _handle_admin_command(
+    session: Session, telegram_user_id: int, chat_id: int
+) -> TelegramWebhookResponse:
+    from app.bot.utils import is_admin
+    
+    if not is_admin(telegram_user_id):
+        return TelegramWebhookResponse(status="ignored", action="ignored", handled=False)
+        
+    return TelegramWebhookResponse(
+        status="ok",
+        action="admin_menu",
+        handled=True,
+        messages=[TelegramMessageOut(text="*Admin Dashboard*\nВыберите действие:")],
+        inline_keyboard=[
+            [InlineButton(text="📊 Статистика", callback_data="admin:stats")],
+            [InlineButton(text="👤 Пользователь", callback_data="admin:user_lookup")],
+            [InlineButton(text="⚠️ Алерты", callback_data="admin:alerts")],
+        ]
+    )
+
+
+async def _handle_admin_callback(
+    session: Session, callback_query: dict[str, Any]
+) -> TelegramWebhookResponse:
+    import uuid
+    from app.bot.utils import is_admin, send_telegram_message
+    from app.ops.billing_review import get_system_stats, get_user_billing_context
+    
+    telegram_user_id = callback_query.get("from", {}).get("id")
+    if not telegram_user_id or not is_admin(telegram_user_id):
+        return TelegramWebhookResponse(status="ignored", action="ignored", handled=False)
+        
+    data = callback_query.get("data", "")
+    
+    if data == "admin:stats":
+        stats = get_system_stats(session)
+        text = (
+            "*Системная статистика*\n\n"
+            f"👥 Всего пользователей: {stats['total_users']}\n"
+            f"💬 Всего сессий: {stats['total_sessions']}\n"
+            f"💎 Активных подписок: {stats['active_subscriptions']}\n"
+            f"⏳ В льготном периоде: {stats['past_due_subscriptions']}\n\n"
+            "*За последние 24 часа:*\n"
+            f"🕒 Сессий: {stats['recent_sessions_24h']}\n"
+            f"✅ Оплат: {stats['completed_intents_24h']}"
+        )
+        return TelegramWebhookResponse(
+            status="ok",
+            action="admin_stats",
+            handled=True,
+            messages=[TelegramMessageOut(text=text)],
+        )
+        
+    if data == "admin:user_lookup":
+        return TelegramWebhookResponse(
+            status="ok",
+            action="admin_user_lookup_prompt",
+            handled=True,
+            messages=[TelegramMessageOut(text="Введите Telegram ID пользователя для поиска:")],
+        )
+
+    if data.startswith("admin:lookup_user_id:"):
+        target_user_id = int(data.split(":")[-1])
+        context = get_user_billing_context(session, target_user_id)
+        if not context:
+            return TelegramWebhookResponse(
+                status="ok",
+                action="admin_user_not_found",
+                handled=True,
+                messages=[TelegramMessageOut(text=f"Пользователь {target_user_id} не найден.")],
+            )
+            
+        sub_text = "Нет подписки"
+        if context.subscription:
+            sub_text = (
+                f"Статус: {context.subscription['status']}\n"
+                f"Провайдер: {context.subscription['provider_type']}\n"
+                f"Истекает: {context.subscription['current_period_end']}\n"
+                f"Автопродление: {'Выкл' if context.subscription['cancel_at_period_end'] else 'Вкл'}"
+            )
+            
+        text = (
+            f"*Информация о пользователе {target_user_id}*\n\n"
+            f"Тариф: {context.access_tier}\n"
+            f"Бесплатных сессий: {context.free_sessions_used}\n"
+            f"Первая сессия завершена: {'Да' if context.first_session_completed else 'Нет'}\n\n"
+            f"*Подписка:*\n{sub_text}\n\n"
+            f"*Последние оплаты:* {len(context.purchase_intents)}"
+        )
+        
+        buttons = []
+        if context.access_tier != "premium":
+            buttons.append([InlineButton(text="🚀 Выдать Premium (30д)", callback_data=f"admin:grant_premium:{target_user_id}")])
+            
+        return TelegramWebhookResponse(
+            status="ok",
+            action="admin_user_details",
+            handled=True,
+            messages=[TelegramMessageOut(text=text)],
+            inline_keyboard=buttons,
+        )
+        
+    if data.startswith("admin:grant_premium:"):
+        target_user_id = int(data.split(":")[-1])
+        from app.billing.repository import create_or_update_subscription, upgrade_access_tier, get_or_create_user_access_state
+        from app.bot.utils import send_telegram_message
+        from datetime import timedelta
+        state = get_or_create_user_access_state(session, target_user_id)
+        upgrade_access_tier(session, state, "premium")
+        
+        create_or_update_subscription(
+            session,
+            telegram_user_id=target_user_id,
+            status="active",
+            current_period_end=datetime.now(timezone.utc) + timedelta(days=30),
+            provider_type="manual_admin",
+        )
+        session.commit()
+        
+        await send_telegram_message(target_user_id, "Вам выдан Premium доступ на 30 дней администратором.")
+        
+        return TelegramWebhookResponse(
+            status="ok",
+            action="admin_premium_granted",
+            handled=True,
+            messages=[TelegramMessageOut(text=f"Premium доступ выдан пользователю {target_user_id}.")],
+        )
+
+    if data == "admin:alerts":
+        from app.ops.alerts import list_operator_alerts
+        alerts = list_operator_alerts(session)
+        if not alerts:
+            return TelegramWebhookResponse(
+                status="ok",
+                action="admin_alerts_empty",
+                handled=True,
+                messages=[TelegramMessageOut(text="Активных алертов нет.")],
+            )
+            
+        text = "*Последние 10 алертов безопасности:*\n\n"
+        buttons = []
+        for alert in alerts[:10]:
+            text += f"• {alert.created_at.strftime('%H:%M')} | {alert.trigger_category} | {alert.classification}\n"
+            # Extract last 8 chars of ID for short button
+            short_id = str(alert.id)[-8:]
+            buttons.append([InlineButton(text=f"🔍 Расследовать {short_id}", callback_data=f"admin:investigate:{alert.id}")])
+            
+        return TelegramWebhookResponse(
+            status="ok",
+            action="admin_alerts_list",
+            handled=True,
+            messages=[TelegramMessageOut(text=text)],
+            inline_keyboard=buttons,
+        )
+
+    if data.startswith("admin:investigate:"):
+        alert_id = uuid.UUID(data.split(":")[-1])
+        from app.ops.investigations import request_and_open_operator_investigation
+        try:
+            inv = request_and_open_operator_investigation(
+                session,
+                operator_alert_id=alert_id,
+                reason_code="critical_safety_review",
+                requested_by=f"admin:{telegram_user_id}",
+                approved_by=f"admin:{telegram_user_id}",
+                audit_notes="Investigated via Telegram Admin Dashboard",
+            )
+            
+            ctx = inv.context_payload
+            text = (
+                f"*Расследование алерта {str(alert_id)[-8:]}*\n\n"
+                f"Пользователь: `{ctx['alert']['telegram_user_id'] if 'telegram_user_id' in ctx['alert'] else 'N/A'}`\n"
+                f"Категория: {ctx['alert']['trigger_category']}\n"
+                f"Уверенность: {ctx['alert']['confidence']}\n\n"
+                f"*Последнее сообщение:* {ctx['current_turn']['last_user_message']}\n\n"
+                f"Статус сессии: {ctx['session']['crisis_state']}"
+            )
+            
+            # Since some fields might be missing in payload depending on _build_investigation_context_payload implementation
+            # let's be safer or just rely on what's definitely there
+            
+            return TelegramWebhookResponse(
+                status="ok",
+                action="admin_investigation_details",
+                handled=True,
+                messages=[TelegramMessageOut(text=text)],
+            )
+        except Exception as e:
+            logger.exception("Investigation failed")
+            return TelegramWebhookResponse(
+                status="ok",
+                action="admin_investigation_error",
+                handled=True,
+                messages=[TelegramMessageOut(text=f"Ошибка при открытии расследования: {str(e)}")],
+            )
+
+    return TelegramWebhookResponse(status="ignored", action="ignored", handled=False)
+
+
+async def _handle_cancel_command(
     session: Session, telegram_user_id: int, chat_id: int
 ) -> TelegramWebhookResponse:
     try:
-        result = process_cancellation_request(session, telegram_user_id=telegram_user_id)
+        result = await process_cancellation_request(session, telegram_user_id=telegram_user_id)
         session.commit()
     except Exception:
         logger.exception(
@@ -600,12 +877,10 @@ def _parse_message(update: dict[str, Any]) -> IncomingMessage | None:
 
     chat = payload.get("chat")
     sender = payload.get("from")
-    text = payload.get("text")
-    if (
-        not isinstance(chat, dict)
-        or not isinstance(sender, dict)
-        or not isinstance(text, str)
-    ):
+    text = payload.get("text") or ""
+    contact_data = payload.get("contact")
+
+    if not isinstance(chat, dict) or not isinstance(sender, dict):
         return None
 
     chat_id = chat.get("id")
@@ -613,46 +888,77 @@ def _parse_message(update: dict[str, Any]) -> IncomingMessage | None:
     if not isinstance(chat_id, int) or not isinstance(telegram_user_id, int):
         return None
 
+    contact = None
+    if isinstance(contact_data, dict):
+        contact = TelegramContact(
+            phone_number=contact_data.get("phone_number", ""),
+            first_name=contact_data.get("first_name", ""),
+            last_name=contact_data.get("last_name"),
+            user_id=contact_data.get("user_id"),
+        )
+
+    if not text and not contact:
+        return None
+
     return IncomingMessage(
         telegram_user_id=telegram_user_id,
         chat_id=chat_id,
         text=text,
+        contact=contact,
     )
 
 
-def _handle_message(
+async def _handle_message(
     session: Session,
-    message: IncomingMessage,
+    incoming: IncomingMessage,
     *,
     background_tasks: BackgroundTasks | None = None,
 ) -> TelegramWebhookResponse:
+
     active_session = _get_or_create_active_session(
         session=session,
-        telegram_user_id=message.telegram_user_id,
-        chat_id=message.chat_id,
+        telegram_user_id=incoming.telegram_user_id,
+        chat_id=incoming.chat_id,
     )
 
-    stripped_text = message.text.strip()
+    stripped_text = incoming.text.strip()
     # Guard against oversized input before touching the DB.
     if len(stripped_text) > MAX_USER_MESSAGE_LENGTH:
         stripped_text = stripped_text[:MAX_USER_MESSAGE_LENGTH]
 
     active_session.last_user_message = stripped_text
 
+    # --- CONTACT HANDLER (Story 7.2 & 7.3) ---
+    if incoming.contact:
+        message_text = await initiate_kaspi_payment(
+            session,
+            telegram_user_id=incoming.telegram_user_id,
+            phone_number=incoming.contact.phone_number,
+        )
+        return _build_response(
+            action="contact_received",
+            session_record=active_session,
+            message_texts=[message_text],
+            extra_signals=("typing", "contact_processed", "kaspi_invoice_initiated"),
+        )
+    # --- END CONTACT HANDLER ---
+
     # Billing gate: skip for crisis sessions, check eligibility for normal flow
     if active_session.crisis_state not in ("crisis_active", "step_down_pending"):
         try:
-            _user_access_state = get_user_access_state(session, active_session.telegram_user_id)
-            if _user_access_state.access_tier != "premium" and not is_free_eligible(_user_access_state):
-                paywall_text, inline_keyboard = build_paywall_response(_user_access_state)
-                _save_session(session, active_session)
-                return _build_response(
-                    action="paywall_gate",
-                    session_record=active_session,
-                    message_texts=[paywall_text],
-                    extra_signals=("typing", "paywall_shown"),
-                    inline_keyboard=inline_keyboard,
-                )
+            premium_access = has_premium_access(session, active_session.telegram_user_id)
+            if not premium_access:
+                _user_access_state = get_user_access_state(session, active_session.telegram_user_id)
+                if not is_free_eligible(_user_access_state):
+                    paywall_text, inline_keyboard = build_paywall_response(_user_access_state)
+                    _save_session(session, active_session)
+                    return _build_response(
+                        action="paywall_gate",
+                        session_record=active_session,
+                        message_texts=[paywall_text],
+                        extra_signals=("typing", "paywall_shown"),
+                        inline_keyboard=inline_keyboard,
+                    )
         except Exception:
             logger.exception(
                 "Billing access check failed for telegram_user_id=%s",
@@ -872,17 +1178,38 @@ def _handle_message(
             ],
         )
 
-    # Brainstorming routing
-    if active_session.brainstorm_phase not in (None, "reflect", "detect_mode"):
-        from app.conversation.brainstorming import route as brainstorm_route
-        result = brainstorm_route(active_session, stripped_text)
+    # Core loop routing (Reflection or Brainstorming)
+    if active_session.brainstorm_phase is not None and active_session.brainstorm_phase != "detect_mode":
+        is_reflection = (
+            active_session.brainstorm_phase == "reflect"
+            or active_session.brainstorm_phase.startswith("reflect_")
+        )
+        if is_reflection:
+            from app.conversation.reflection import route as reflection_route
+            result = await reflection_route(active_session, stripped_text)
+            action_prefix = "reflect"
+        else:
+            from app.conversation.brainstorming import route as brainstorm_route
+            result = await brainstorm_route(active_session, stripped_text)
+            action_prefix = "brainstorm"
+
         response_messages = result.messages
         action = result.action
         active_session.brainstorm_phase = result.next_phase
         active_session.brainstorm_data = result.updated_data
-        active_session.working_context = _update_brainstorm_context(
-            active_session.working_context, result.updated_data
-        )
+
+        if not is_reflection:
+            active_session.working_context = _update_brainstorm_context(
+                active_session.working_context, result.updated_data
+            )
+        else:
+            # F3 fix: update working_context for reflection
+            active_session.working_context = (
+                result.updated_data.get("analysis") 
+                or result.updated_data.get("topic") 
+                or active_session.working_context
+            )
+        
         if result.summary_payload is not None:
             summary_payload = result.summary_payload
             active_session.status = "completed"
@@ -905,7 +1232,8 @@ def _handle_message(
                 schedule_session_summary_generation(background_tasks, summary_payload)
             else:
                 logger.error(
-                    "BackgroundTasks unavailable for brainstorm session_id=%s; skipping summary",
+                    "BackgroundTasks unavailable for %s session_id=%s; skipping summary",
+                    action_prefix,
                     active_session.id,
                 )
         return _build_response(
@@ -1153,14 +1481,22 @@ def _merge_context_for_session(
 
 def _parse_mode_callback(
     update: dict[str, Any],
-) -> tuple[int, int, str] | None:
-    """Return (telegram_user_id, chat_id, mode_data) when callback carries a mode: prefix."""
+) -> tuple[int, int, str, str] | None:
+    """Return (telegram_user_id, chat_id, mode_data, prefix) when callback carries a mode selection prefix."""
     cbq = update.get("callback_query")
     if not isinstance(cbq, dict):
         return None
     data = cbq.get("data")
-    if not isinstance(data, str) or not data.startswith("mode:"):
+    if not isinstance(data, str):
         return None
+    # Support both legacy "mode:" and new "brainstorm:mode:" prefixes
+    if data.startswith("mode:"):
+        prefix = "mode:"
+    elif data.startswith("brainstorm:mode:"):
+        prefix = "brainstorm:mode:"
+    else:
+        return None
+
     from_field = cbq.get("from")
     message_field = cbq.get("message")
     if not isinstance(from_field, dict) or not isinstance(message_field, dict):
@@ -1172,13 +1508,13 @@ def _parse_mode_callback(
     chat_id = chat_field.get("id")
     if not isinstance(user_id, int) or not isinstance(chat_id, int):
         return None
-    return user_id, chat_id, data
+    return user_id, chat_id, data, prefix
 
 
-def _handle_mode_selection_callback(
-    session: Session, telegram_user_id: int, chat_id: int, mode_data: str
+async def _handle_mode_selection_callback(
+    session: Session, telegram_user_id: int, chat_id: int, mode_data: str, prefix: str
 ) -> TelegramWebhookResponse:
-    mode = mode_data[len("mode:"):]
+    mode = mode_data[len(prefix):]
     if mode in _VALID_MODES:
         source = "explicit"
     else:
@@ -1210,7 +1546,7 @@ def _handle_mode_selection_callback(
     )
 
 
-def _handle_brainstorm_mode_callback(
+async def _handle_brainstorm_mode_callback(
     session: Session, callback_query: dict[str, Any]
 ) -> TelegramWebhookResponse:
     from_field = callback_query.get("from")
@@ -1229,8 +1565,10 @@ def _handle_brainstorm_mode_callback(
     active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
 
     if mode == "reflect":
-        active_session.brainstorm_phase = "reflect"
-        message_texts = [OPENING_PROMPT]
+        from app.conversation.reflection import FALLBACKS
+        active_session.brainstorm_phase = "reflect_listen"
+        active_session.reflective_mode = "deep"  # F6 fix
+        message_texts = [FALLBACKS["reflect_listen"]]
         action = "brainstorm_mode_reflect"
     else:  # "brainstorm"
         from app.conversation.brainstorming import FALLBACKS
@@ -1255,7 +1593,7 @@ def _handle_brainstorm_mode_callback(
     )
 
 
-def _handle_brainstorm_approach_callback(
+async def _handle_brainstorm_approach_callback(
     session: Session, callback_query: dict[str, Any]
 ) -> TelegramWebhookResponse:
     from_field = callback_query.get("from")
@@ -1319,10 +1657,6 @@ def _build_opening_prompt(
     has_prior = _safe_check_has_prior_sessions(session, telegram_user_id)
 
     prompt_text = RETURNING_USER_OPENING_PROMPT if has_prior else OPENING_PROMPT
-    if not has_prior:
-        prompt_text += (
-            "\n\n_Если тебе сейчас очень плохо — просто напиши об этом, я не начну с вопросов._"
-        )
 
     return TelegramWebhookResponse(
         status="ok",

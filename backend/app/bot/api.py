@@ -63,6 +63,8 @@ def _deliver_telegram_response(chat_id: int, response: TelegramWebhookResponse) 
                         row_data.append(btn_data)
                     keyboard.append(row_data)
                 payload["reply_markup"] = {"inline_keyboard": keyboard}
+            elif response.reply_markup and message == response.messages[-1]:
+                payload["reply_markup"] = response.reply_markup.model_dump()
 
             try:
                 res = client.post(f"{base_url}/sendMessage", json=payload)
@@ -89,13 +91,13 @@ def _deliver_telegram_response(chat_id: int, response: TelegramWebhookResponse) 
 
 
 @router.post("/webhook", response_model=TelegramWebhookResponse)
-def telegram_webhook(
+async def telegram_webhook(
     update: dict[str, Any],
     background_tasks: BackgroundTasks,
     session: SessionDep,
 ) -> TelegramWebhookResponse:
     """Telegram-first ingress that delegates conversation state to the session seam."""
-    response = handle_session_entry(session, update, background_tasks=background_tasks)
+    response = await handle_session_entry(session, update, background_tasks=background_tasks)
     
     # Extract chat_id to deliver the response asynchronously
     chat_id = None

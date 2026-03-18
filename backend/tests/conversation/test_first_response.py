@@ -15,7 +15,7 @@ def test_compose_first_trust_response_extracts_situation_and_emotion() -> None:
     assert len(response.messages) == 2
     assert "муж" in response.messages[0]
     assert "обидно" in response.messages[0]
-    assert response.messages[0].startswith("Похоже,")
+    assert response.messages[0].startswith("💬 Похоже,")
 
 
 def test_compose_first_trust_response_low_confidence_is_tentative() -> None:

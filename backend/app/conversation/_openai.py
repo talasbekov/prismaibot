@@ -44,6 +44,37 @@ def call_chat(
         return None
 
 
+async def async_call_chat(
+    messages: list[dict],
+    *,
+    max_tokens: int = 400,
+    temperature: float = 0.7,
+) -> str | None:
+    """Call OpenAI Chat Completions asynchronously."""
+    if not settings.OPENAI_API_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": _MODEL,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+    except Exception:
+        logger.exception("OpenAI Async API call failed")
+        return None
+
+
 def parse_two_messages(text: str) -> tuple[str, str] | None:
     """Split GPT response into exactly two messages separated by '---'."""
     parts = text.strip().split("---")

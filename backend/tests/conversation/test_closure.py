@@ -16,7 +16,7 @@ def test_compose_session_closure_returns_takeaway_and_bounded_next_steps() -> No
 
     assert response.action == "session_closure"
     assert len(response.messages) == 2
-    assert response.messages[0].startswith("Если подвести это к ясной точке,")
+    assert response.messages[0].startswith("🪞 Если подвести это к ясной точке,")
     assert 1 <= len(response.next_steps) <= 3
     assert response.messages[1].count("\n") >= 1
     # Regression: deep mode must not produce wall-of-text (Telegram readability)

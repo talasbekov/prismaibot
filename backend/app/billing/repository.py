@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
-from app.billing.models import FreeSessionEvent, PurchaseIntent, UserAccessState
+from app.billing.models import (
+    FreeSessionEvent,
+    PurchaseIntent,
+    Subscription,
+    UserAccessState,
+)
 
 
 def get_or_create_user_access_state(
@@ -76,6 +81,15 @@ def mark_threshold_reached(
     session.add(user_access_state)
 
 
+def mark_first_session_completed(
+    session: Session,
+    user_access_state: UserAccessState,
+) -> None:
+    user_access_state.first_session_completed = True
+    user_access_state.updated_at = datetime.now(timezone.utc)
+    session.add(user_access_state)
+
+
 def get_pending_purchase_intent(
     session: Session,
     telegram_user_id: int,
@@ -91,17 +105,25 @@ def get_pending_purchase_intent(
 def create_purchase_intent(
     session: Session,
     *,
+    id: uuid.UUID | None = None,
     telegram_user_id: int,
     invoice_payload: str,
     amount: int,
     currency: str = "XTR",
+    provider_type: str = "telegram_stars",
+    provider_invoice_id: str | None = None,
+    phone_number: str | None = None,
 ) -> PurchaseIntent:
     intent = PurchaseIntent(
+        id=id or uuid.uuid4(),
         telegram_user_id=telegram_user_id,
         invoice_payload=invoice_payload,
         amount=amount,
         currency=currency,
         status="pending",
+        provider_type=provider_type,
+        provider_invoice_id=provider_invoice_id,
+        phone_number=phone_number,
     )
     session.add(intent)
     return intent
@@ -113,6 +135,17 @@ def get_purchase_intent_by_payload(
 ) -> PurchaseIntent | None:
     return session.exec(
         select(PurchaseIntent).where(PurchaseIntent.invoice_payload == invoice_payload)
+    ).first()
+
+
+def get_purchase_intent_by_provider_invoice_id(
+    session: Session,
+    provider_invoice_id: str,
+) -> PurchaseIntent | None:
+    return session.exec(
+        select(PurchaseIntent).where(
+            PurchaseIntent.provider_invoice_id == provider_invoice_id
+        )
     ).first()
 
 
@@ -135,3 +168,52 @@ def upgrade_access_tier(
     user_access_state.access_tier = tier
     user_access_state.updated_at = datetime.now(timezone.utc)
     session.add(user_access_state)
+
+
+def get_subscription(session: Session, telegram_user_id: int) -> Subscription | None:
+    return session.exec(
+        select(Subscription).where(Subscription.telegram_user_id == telegram_user_id)
+    ).first()
+
+
+def get_subscription_by_provider_id(
+    session: Session, provider_subscription_id: str
+) -> Subscription | None:
+    return session.exec(
+        select(Subscription).where(
+            Subscription.provider_subscription_id == provider_subscription_id
+        )
+    ).first()
+
+
+def create_or_update_subscription(
+    session: Session,
+    *,
+    telegram_user_id: int,
+    status: str,
+    current_period_end: datetime,
+    cancel_at_period_end: bool = False,
+    provider_type: str = "telegram_stars",
+    provider_subscription_id: str | None = None,
+) -> Subscription:
+    subscription = get_subscription(session, telegram_user_id)
+    if not subscription:
+        subscription = Subscription(
+            telegram_user_id=telegram_user_id,
+            status=status,
+            current_period_end=current_period_end,
+            cancel_at_period_end=cancel_at_period_end,
+            provider_type=provider_type,
+            provider_subscription_id=provider_subscription_id,
+        )
+    else:
+        subscription.status = status
+        subscription.current_period_end = current_period_end
+        subscription.cancel_at_period_end = cancel_at_period_end
+        subscription.provider_type = provider_type
+        if provider_subscription_id:
+            subscription.provider_subscription_id = provider_subscription_id
+        subscription.updated_at = datetime.now(timezone.utc)
+
+    session.add(subscription)
+    return subscription

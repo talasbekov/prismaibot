@@ -2,12 +2,20 @@ import importlib
 import os
 from collections.abc import Generator
 
+# Force test settings before ANY app module is imported
+os.environ["SAFETY_ENABLED"] = "true"
+os.environ["OPENAI_API_KEY"] = ""
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete
 
 from app.billing.models import FreeSessionEvent, PurchaseIntent, UserAccessState
 from app.core.config import settings
+
+# Double-ensure for any modules already importing settings
+settings.OPENAI_API_KEY = ""
+
 from app.core.db import engine, init_db
 from app.main import app
 from app.models import (
@@ -30,6 +38,7 @@ from tests.utils.utils import get_superuser_token_headers
 
 def _reload_app(*, enable_legacy_web_routes: bool) -> TestClient:
     os.environ["SAFETY_ENABLED"] = "true"
+    os.environ["OPENAI_API_KEY"] = ""
     os.environ.pop("TELEGRAM_BOT_TOKEN", None)
     if enable_legacy_web_routes:
         os.environ["ENABLE_LEGACY_WEB_ROUTES"] = "true"

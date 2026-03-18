@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlmodel import Session, select, text
@@ -12,9 +12,10 @@ from app.models import (
 )
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def clear_billing_and_memory_tables(db: Session):
     db.rollback()
+    db.exec(text("DELETE FROM subscriptions"))
     db.exec(text("DELETE FROM user_access_states"))
     db.exec(text("DELETE FROM purchase_intents"))
     db.exec(text("DELETE FROM free_session_events"))
@@ -27,12 +28,15 @@ def clear_billing_and_memory_tables(db: Session):
     db.exec(text("DELETE FROM telegram_session"))
     db.commit()
 
-def test_cancellation_preserves_memory_records(db: Session, clear_billing_and_memory_tables):
+@pytest.mark.anyio
+async def test_cancellation_preserves_memory_records(db: Session, clear_billing_and_memory_tables):
     user_id = 12345
     chat_id = 67890
 
-    # 1. Setup premium user with memory records
+    # 1. Setup premium user with memory records and subscription
     state = UserAccessState(telegram_user_id=user_id, access_tier="premium")
+    from app.billing.repository import create_or_update_subscription
+    create_or_update_subscription(db, telegram_user_id=user_id, status="active", current_period_end=datetime.now(timezone.utc) + timedelta(days=30))
 
     # Need a session for memory records to refer to
     tsession = TelegramSession(telegram_user_id=user_id, chat_id=chat_id)
@@ -66,14 +70,18 @@ def test_cancellation_preserves_memory_records(db: Session, clear_billing_and_me
             "text": "/cancel"
         }
     }
-    response = handle_session_entry(db, cancel_update)
+    response = await handle_session_entry(db, cancel_update)
     assert response.status == "ok"
     assert "сохраняются" in response.messages[0].text
 
-    # 3. Verify access is free but memory records STILL EXIST
+    # 3. Verify access remains premium until period end, but auto-renewal cancelled
     db.expire_all()
     updated_state = db.exec(select(UserAccessState).where(UserAccessState.telegram_user_id == user_id)).one()
-    assert updated_state.access_tier == "free"
+    assert updated_state.access_tier == "premium"
+    
+    from app.billing.models import Subscription
+    sub = db.exec(select(Subscription).where(Subscription.telegram_user_id == user_id)).one()
+    assert sub.cancel_at_period_end is True
 
     summaries = db.exec(select(SessionSummary).where(SessionSummary.telegram_user_id == user_id)).all()
     assert len(summaries) == 1
@@ -83,7 +91,8 @@ def test_cancellation_preserves_memory_records(db: Session, clear_billing_and_me
     assert len(facts) == 1
     assert facts[0].fact_value == "User fact"
 
-def test_payment_upgrade_enables_immediate_access_without_paywall(db: Session, clear_billing_and_memory_tables):
+@pytest.mark.anyio
+async def test_payment_upgrade_enables_immediate_access_without_paywall(db: Session, clear_billing_and_memory_tables):
     user_id = 11111
     chat_id = 22222
 
@@ -91,7 +100,7 @@ def test_payment_upgrade_enables_immediate_access_without_paywall(db: Session, c
     state = UserAccessState(
         telegram_user_id=user_id,
         access_tier="free",
-        threshold_reached_at=datetime.now(timezone.utc)
+        first_session_completed=True,
     )
     db.add(state)
     db.commit()
@@ -104,7 +113,7 @@ def test_payment_upgrade_enables_immediate_access_without_paywall(db: Session, c
             "text": "Hello"
         }
     }
-    response = handle_session_entry(db, msg_update)
+    response = await handle_session_entry(db, msg_update)
     assert response.action == "paywall_gate"
 
     # 3. Upgrade to premium (simulated payment confirmation)
@@ -113,11 +122,12 @@ def test_payment_upgrade_enables_immediate_access_without_paywall(db: Session, c
     db.commit()
 
     # 4. Next message in same flow passes gate immediately
-    response2 = handle_session_entry(db, msg_update)
+    response2 = await handle_session_entry(db, msg_update)
     assert response2.action != "paywall_gate"
     assert response2.status == "ok"
 
-def test_cancellation_restores_paywall_if_threshold_already_reached(db: Session, clear_billing_and_memory_tables):
+@pytest.mark.anyio
+async def test_cancellation_restores_paywall_if_threshold_already_reached(db: Session, clear_billing_and_memory_tables):
     user_id = 33333
     chat_id = 44444
 
@@ -125,7 +135,7 @@ def test_cancellation_restores_paywall_if_threshold_already_reached(db: Session,
     state = UserAccessState(
         telegram_user_id=user_id,
         access_tier="premium",
-        threshold_reached_at=datetime.now(timezone.utc)
+        first_session_completed=True,
     )
     db.add(state)
     db.commit()
@@ -138,7 +148,7 @@ def test_cancellation_restores_paywall_if_threshold_already_reached(db: Session,
             "text": "Hello"
         }
     }
-    response = handle_session_entry(db, msg_update)
+    response = await handle_session_entry(db, msg_update)
     assert response.action != "paywall_gate"
 
     # 3. Cancel premium
@@ -149,13 +159,14 @@ def test_cancellation_restores_paywall_if_threshold_already_reached(db: Session,
             "text": "/cancel"
         }
     }
-    handle_session_entry(db, cancel_update)
+    await handle_session_entry(db, cancel_update)
 
     # 4. Next message is blocked again (threshold still set)
-    response2 = handle_session_entry(db, msg_update)
+    response2 = await handle_session_entry(db, msg_update)
     assert response2.action == "paywall_gate"
 
-def test_full_lifecycle_continuity(db: Session, clear_billing_and_memory_tables):
+@pytest.mark.anyio
+async def test_full_lifecycle_continuity(db: Session, clear_billing_and_memory_tables):
     user_id = 77777
     chat_id = 88888
 
@@ -177,7 +188,7 @@ def test_full_lifecycle_continuity(db: Session, clear_billing_and_memory_tables)
     db.commit()
 
     # 2. Reach threshold
-    state.threshold_reached_at = datetime.now(timezone.utc)
+    state.first_session_completed = True
     db.add(state)
     db.commit()
 
@@ -186,10 +197,11 @@ def test_full_lifecycle_continuity(db: Session, clear_billing_and_memory_tables)
         "message": {
             "from": {"id": user_id},
             "chat": {"id": chat_id},
-            "text": "Hello again"
+            "text": "Hello again, I want to start a second session."
         }
     }
-    assert handle_session_entry(db, msg_update).action == "paywall_gate"
+    resp = await handle_session_entry(db, msg_update)
+    assert resp.action == "paywall_gate"
 
     # 4. Upgrade
     state.access_tier = "premium"
@@ -199,14 +211,15 @@ def test_full_lifecycle_continuity(db: Session, clear_billing_and_memory_tables)
     # 5. Verify premium session with recall (first turn)
     # Note: we need a new chat_id or clear sessions to trigger is_first_turn if we want to check recall
     # but here we just check it passes gate.
-    response = handle_session_entry(db, msg_update)
+    response = await handle_session_entry(db, msg_update)
     assert response.action != "paywall_gate"
 
     # 6. Cancel
     cancel_update = {"message": {"from": {"id": user_id}, "chat": {"id": chat_id}, "text": "/cancel"}}
-    handle_session_entry(db, cancel_update)
+    await handle_session_entry(db, cancel_update)
 
     # 7. Verify memory still exists and paywall is back
     db.expire_all()
     assert db.exec(select(SessionSummary).where(SessionSummary.telegram_user_id == user_id)).one().takeaway == "The important memory"
-    assert handle_session_entry(db, msg_update).action == "paywall_gate"
+    resp2 = await handle_session_entry(db, msg_update)
+    assert resp2.action == "paywall_gate"
