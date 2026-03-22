@@ -113,6 +113,25 @@ async def process_apipay_webhook(
         await send_telegram_message(sub.telegram_user_id, PAYMENT_RETRY_MESSAGE)
         return {"status": "ok", "message": "payment_failed_notified"}
 
+    if event == "subscription.grace_period_started":
+        provider_sub_id = str(subscription_data.get("id"))
+        sub = repository.get_subscription_by_provider_id(session, provider_sub_id)
+        if not sub:
+            logger.warning("Subscription not found for provider_sub_id=%s", provider_sub_id)
+            return {"status": "error", "message": "subscription_not_found"}
+
+        expires_at_str = payload.get("expires_at")
+        if expires_at_str:
+            sub.current_period_end = datetime.fromisoformat(expires_at_str)
+        sub.status = "past_due"
+        sub.updated_at = datetime.now(timezone.utc)
+        session.add(sub)
+        session.commit()
+
+        remaining_hours = max(0, int((sub.current_period_end - datetime.now(timezone.utc)).total_seconds() // 3600))
+        await send_telegram_message(sub.telegram_user_id, STATUS_SUBSCRIPTION_PAST_DUE_MESSAGE.format(hours=remaining_hours))
+        return {"status": "ok", "message": "grace_period_started"}
+
     if event == "subscription.expired":
         provider_sub_id = str(subscription_data.get("id"))
         sub = repository.get_subscription_by_provider_id(session, provider_sub_id)
@@ -357,7 +376,7 @@ def build_status_response(
         if subscription.status == "past_due":
             from datetime import timedelta
 
-            grace_end = subscription.current_period_end + timedelta(hours=24)
+            grace_end = subscription.current_period_end
             remaining_hours = int(
                 (grace_end - datetime.now(timezone.utc)).total_seconds() // 3600
             )

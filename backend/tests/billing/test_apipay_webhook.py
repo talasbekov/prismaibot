@@ -149,3 +149,78 @@ async def test_apipay_webhook_subscription_payment_failed_no_status_change(db: S
     # User must be notified with retry message
     from app.billing.prompts import PAYMENT_RETRY_MESSAGE
     mock_send.assert_called_once_with(user_id, PAYMENT_RETRY_MESSAGE)
+
+
+@pytest.mark.anyio
+async def test_apipay_webhook_grace_period_started(db: Session):
+    """grace_period_started should set status=past_due and current_period_end=expires_at."""
+    from app.billing.repository import create_or_update_subscription
+    from app.billing.models import Subscription
+    from datetime import datetime, timedelta, timezone
+
+    user_id = 80020
+    provider_sub_id = "501"
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+
+    create_or_update_subscription(
+        db,
+        telegram_user_id=user_id,
+        status="active",
+        current_period_end=datetime.now(timezone.utc) + timedelta(days=30),
+        provider_type="apipay",
+        provider_subscription_id=provider_sub_id,
+    )
+    db.commit()
+
+    payload = {
+        "event": "subscription.grace_period_started",
+        "subscription": {"id": int(provider_sub_id)},
+        "expires_at": expires_at,
+    }
+    body = json.dumps(payload).encode()
+
+    with (
+        patch("app.billing.api.verify_apipay_signature", return_value=True),
+        patch("app.billing.service.send_telegram_message", new_callable=AsyncMock) as mock_send,
+    ):
+        response = client.post(
+            f"{settings.API_V1_STR}/billing/apipay/webhook",
+            content=body,
+            headers={"X-Webhook-Signature": "sha256=dummy"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "message": "grace_period_started"}
+
+    db.expire_all()
+    sub = db.exec(select(Subscription).where(Subscription.telegram_user_id == user_id)).one()
+    assert sub.status == "past_due"
+    # current_period_end should be the grace period end (expires_at), not the original billing period end
+    assert abs((sub.current_period_end - datetime.fromisoformat(expires_at)).total_seconds()) < 2
+
+    # User must be notified about grace period
+    mock_send.assert_called_once()
+    call_args = mock_send.call_args[0]
+    assert call_args[0] == user_id
+    assert "Льготный период" in call_args[1] or "ч." in call_args[1]
+
+
+@pytest.mark.anyio
+async def test_apipay_webhook_grace_period_started_sub_not_found():
+    """grace_period_started with unknown subscription returns error."""
+    payload = {
+        "event": "subscription.grace_period_started",
+        "subscription": {"id": 99999},
+        "expires_at": "2026-04-01T00:00:00+00:00",
+    }
+    body = json.dumps(payload).encode()
+
+    with patch("app.billing.api.verify_apipay_signature", return_value=True):
+        response = client.post(
+            f"{settings.API_V1_STR}/billing/apipay/webhook",
+            content=body,
+            headers={"X-Webhook-Signature": "sha256=dummy"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "error", "message": "subscription_not_found"}
