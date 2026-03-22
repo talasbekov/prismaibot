@@ -83,6 +83,7 @@ class ApiPayClient:
         phone_number: str,
         period: str = "monthly",
         description: str | None = None,
+        external_subscriber_id: str | None = None,
     ) -> ApiPaySubscriptionResponse:
         """Create a recurring subscription in ApiPay."""
         payload: dict[str, Any] = {
@@ -92,6 +93,8 @@ class ApiPayClient:
         }
         if description:
             payload["description"] = description
+        if external_subscriber_id:
+            payload["external_subscriber_id"] = external_subscriber_id
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -100,10 +103,10 @@ class ApiPayClient:
                 headers=self.headers,
                 timeout=10.0,
             )
-            
+
             if response.status_code >= 400:
                 raise ApiPayError(f"ApiPay error {response.status_code}: {response.text}")
-            
+
             data = response.json()
             sub_data = data.get("subscription", data)
             return ApiPaySubscriptionResponse(**sub_data)

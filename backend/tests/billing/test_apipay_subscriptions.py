@@ -88,7 +88,7 @@ async def test_webhook_subscription_payment_failed(db: Session):
 async def test_cancel_apipay_subscription(db: Session):
     user_id = 90004
     provider_sub_id = "666"
-    
+
     repository.create_or_update_subscription(
         db,
         telegram_user_id=user_id,
@@ -98,12 +98,26 @@ async def test_cancel_apipay_subscription(db: Session):
         provider_subscription_id=provider_sub_id
     )
     db.commit()
-    
+
     with patch("app.billing.apipay_client.ApiPayClient.cancel_subscription", return_value=True) as mock_cancel:
         success = await service.cancel_apipay_subscription(db, telegram_user_id=user_id)
         assert success is True
-        
+
         db.expire_all()
         sub = repository.get_subscription(db, user_id)
         assert sub.cancel_at_period_end is True
         mock_cancel.assert_called_once_with(666)
+
+@pytest.mark.anyio
+async def test_create_apipay_subscription_passes_external_subscriber_id(db: Session):
+    """create_apipay_subscription should pass telegram_user_id as external_subscriber_id."""
+    mock_response = ApiPaySubscriptionResponse(id=1, status="active", amount=3000.0, billing_period="monthly")
+
+    with patch("app.billing.service.ApiPayClient") as MockClient:
+        mock_instance = MockClient.return_value
+        mock_instance.create_subscription = AsyncMock(return_value=mock_response)
+
+        await service.create_apipay_subscription(db, telegram_user_id=12345, phone_number="87001234567")
+
+        call_kwargs = mock_instance.create_subscription.call_args.kwargs
+        assert call_kwargs["external_subscriber_id"] == "12345"

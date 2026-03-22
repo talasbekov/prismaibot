@@ -161,6 +161,7 @@ async def create_apipay_subscription(
             amount=float(amount_kzt),
             phone_number=normalized_phone,
             description=f"Premium monthly subscription for {telegram_user_id}",
+            external_subscriber_id=str(telegram_user_id),
         )
         
         repository.create_or_update_subscription(
