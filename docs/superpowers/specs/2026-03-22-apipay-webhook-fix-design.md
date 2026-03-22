@@ -20,45 +20,80 @@
 
 ### 1. Переработка вебхук-событий (`service.py`)
 
-Переназначаем события на правильные переходы состояний:
+| ApiPay событие | Новое поведение |
+|---|---|
+| `subscription.payment_failed` | → лог + `PAYMENT_RETRY_MESSAGE` пользователю. Мутация статуса (`session.add/commit`) **удаляется полностью**. |
+| `subscription.grace_period_started` | → `past_due`, `current_period_end = expires_at`, уведомление |
+| `subscription.expired` | без изменений |
+| `subscription.payment_succeeded` | без изменений |
+| `invoice.refunded` | → только лог |
 
-| ApiPay событие | Старое поведение | Новое поведение |
-|---|---|---|
-| `subscription.payment_failed` | → `past_due` + уведомление | → лог + уведомление "оплата не прошла, повторим попытку" |
-| `subscription.grace_period_started` | не обрабатывалось | → `past_due` + уведомление о grace period |
-| `subscription.expired` | → `suspended` + downgrade | без изменений |
-| `subscription.payment_succeeded` | → `active` + продление | без изменений |
-| `invoice.refunded` | не обрабатывалось | → лог (возвраты не поддерживаются) |
+**UX intent:** пользователь не получает уведомление при каждом неудачном платеже. Первое уведомление приходит только когда ApiPay объявляет grace period (`grace_period_started`). Это намеренно — меньше паники при ретраях.
 
-**Логика:** `past_due` теперь означает именно "ApiPay начал grace period" — все попытки оплаты исчерпаны. `payment_failed` — промежуточное событие, пока ApiPay ещё делает ретраи.
+**`grace_period_started` handler (новый):**
+```python
+if event == "subscription.grace_period_started":
+    provider_sub_id = str(subscription_data.get("id"))
+    sub = repository.get_subscription_by_provider_id(session, provider_sub_id)
+    if not sub:
+        logger.warning("Subscription not found for provider_sub_id=%s", provider_sub_id)
+        return {"status": "error", "message": "subscription_not_found"}
 
-### 2. Убираем локальный стейт-машин (`service.py`, `repository.py`)
+    expires_at_str = payload.get("expires_at")
+    if expires_at_str:
+        sub.current_period_end = datetime.fromisoformat(expires_at_str)
+    sub.status = "past_due"
+    sub.updated_at = datetime.now(timezone.utc)
+    session.add(sub)
+    session.commit()
 
-`check_and_update_subscription_status` сейчас самостоятельно переводит статусы:
-- `active → past_due` если `now > current_period_end`
-- `past_due → suspended` если `now > current_period_end + 24h`
+    remaining_hours = max(0, int((sub.current_period_end - datetime.now(timezone.utc)).total_seconds() // 3600))
+    await send_telegram_message(sub.telegram_user_id, STATUS_SUBSCRIPTION_PAST_DUE_MESSAGE.format(hours=remaining_hours))
+    return {"status": "ok", "message": "grace_period_started"}
+```
 
-**После:** функция становится read-only — только читает текущий статус из БД, не меняет его. Все переходы состояний происходят исключительно через вебхуки ApiPay.
+Новый промпт в `prompts.py`:
+```python
+PAYMENT_RETRY_MESSAGE = "Оплата не прошла. ApiPay сделает повторную попытку автоматически."
+```
 
-`build_status_response` и `has_premium_access` продолжают использовать ту же функцию, но теперь она просто возвращает подписку без side effects.
+**`build_status_response` — исправление:** заменить:
+```python
+grace_end = subscription.current_period_end + timedelta(hours=24)
+```
+на:
+```python
+grace_end = subscription.current_period_end
+```
+После этого деплоя `current_period_end` для `past_due` записей = конец grace period (из `expires_at`). Существующие `past_due` записи (если есть) будут показывать неточное количество часов, но их мало и они разрешатся через вебхуки `subscription.expired`.
 
-**Компромисс:** если вебхук от ApiPay потеряется, статус в БД не обновится. Принимаем этот риск — ApiPay ретраит вебхуки (до 3 раз с интервалами 1/5/15 минут).
+### 2. Убираем локальный стейт-машин (`service.py`)
 
-### 3. `external_subscriber_id` при создании подписки (`apipay_client.py`, `service.py`)
+`check_and_update_subscription_status` становится read-only: убрать все `session.add`, `session.flush` внутри функции. Просто возвращает `Subscription | None`.
 
-- `ApiPayClient.create_subscription` принимает новый параметр `external_subscriber_id: str | None = None`
+**Принятые риски (явно):**
+
+1. **Потеря вебхука → вечный `past_due`:** если `subscription.expired` от ApiPay не дойдёт, пользователь с `past_due` статусом сохраняет доступ (`has_premium_access` возвращает `True` для `past_due`). Это намеренный trade-off Варианта Б. ApiPay ретраит subscription webhooks до 3 раз (1/5/15 мин). При необходимости можно добавить periodic reconciliation job позже (Вариант В).
+
+2. **Callers не делают commit самостоятельно:** `build_status_response` и `has_premium_access` вызывают функцию и не вызывают `session.commit()` сами — удаление мутаций безопасно.
+
+**Legacy users:** пользователи с `access_tier="premium"` без subscription record не затронуты — `has_premium_access` fallback остаётся.
+
+### 3. `external_subscriber_id` при создании подписки
+
+- `ApiPayClient.create_subscription` получает параметр `external_subscriber_id: str | None = None`, включается в payload если передан
 - `create_apipay_subscription` передаёт `external_subscriber_id=str(telegram_user_id)`
-
-Позволяет найти подписку в дашборде ApiPay по telegram_user_id и упрощает reconciliation.
+- `ApiPaySubscriptionResponse` не меняется — Pydantic v2 игнорирует лишние поля в ответе по умолчанию
 
 ### 4. Валидация `APIPAY_WEBHOOK_SECRET` в конфиге (`config.py`)
 
-Добавляем в `_enforce_non_default_secrets`:
+Добавить в `_enforce_non_default_secrets`:
 ```python
 self._require_non_local_setting("APIPAY_WEBHOOK_SECRET", self.APIPAY_WEBHOOK_SECRET)
 ```
 
-Запуск без `APIPAY_WEBHOOK_SECRET` в production становится невозможным.
+`PAYMENT_PROVIDER_WEBHOOK_SECRET` и `/billing/webhook` — без изменений (другой эндпоинт).
+`billing/api.py`, `billing/utils.py` — без изменений.
 
 ---
 
@@ -66,13 +101,13 @@ self._require_non_local_setting("APIPAY_WEBHOOK_SECRET", self.APIPAY_WEBHOOK_SEC
 
 | Файл | Тип изменения |
 |---|---|
-| `backend/app/billing/service.py` | Основные изменения — вебхуки + убрать стейт-машин |
+| `backend/app/billing/service.py` | Вебхуки + стейт-машин + fix `build_status_response` |
 | `backend/app/billing/apipay_client.py` | Добавить `external_subscriber_id` |
-| `backend/app/core/config.py` | Добавить валидацию секрета |
-| `backend/app/billing/prompts.py` | Добавить сообщение для `payment_failed` (retry) |
-| `backend/tests/billing/test_payment_confirmation.py` | Обновить под новую логику |
-| `backend/tests/billing/test_payment_initiation.py` | Обновить под новую логику |
-| `backend/tests/billing/test_subscriptions.py` | Добавить тесты `grace_period_started`, `invoice.refunded` |
+| `backend/app/core/config.py` | Валидация секрета |
+| `backend/app/billing/prompts.py` | Добавить `PAYMENT_RETRY_MESSAGE` |
+| `backend/tests/billing/test_payment_confirmation.py` | Обновить |
+| `backend/tests/billing/test_payment_initiation.py` | Обновить |
+| `backend/tests/billing/test_subscriptions.py` | Добавить тесты для новых событий |
 | `backend/tests/billing/test_status_command.py` | Обновить под read-only статус |
 | `backend/tests/billing/test_paywall_ui.py` | Обновить если нужно |
 
@@ -81,6 +116,7 @@ self._require_non_local_setting("APIPAY_WEBHOOK_SECRET", self.APIPAY_WEBHOOK_SEC
 ## Что НЕ меняется
 
 - Флоу создания инвойса и подписки
-- Логика `has_premium_access` (проверяет `status in ("active", "past_due")`)
-- Отмена подписки
-- Paywall и free tier логика
+- `has_premium_access` (проверяет `status in ("active", "past_due")`)
+- Отмена подписки, paywall, free tier
+- `billing/api.py`, `billing/utils.py`, `repository.py`
+- `PAYMENT_PROVIDER_WEBHOOK_SECRET`, `/billing/webhook`
