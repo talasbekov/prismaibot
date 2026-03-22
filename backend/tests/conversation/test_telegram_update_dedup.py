@@ -105,8 +105,6 @@ async def test_dedup_failure_proceeds_normally(db: Session) -> None:
     
     # Чтобы выполнение прошло дальше блока дедупликации, нам нужно чтобы _get_or_create_active_session не упал сразу
     # Или просто проверить, что мы вышли из блока дедупликации.
-    # В handle_session_entry после дедупликации идет обращение к message['pre_checkout_query'] и т.д.
-    
     resp = await handle_session_entry(mock_session, update)
     
     # Должен продолжить и попытаться найти/создать сессию

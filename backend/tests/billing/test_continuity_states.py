@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from sqlmodel import Session, select, text
@@ -36,7 +37,11 @@ async def test_cancellation_preserves_memory_records(db: Session, clear_billing_
     # 1. Setup premium user with memory records and subscription
     state = UserAccessState(telegram_user_id=user_id, access_tier="premium")
     from app.billing.repository import create_or_update_subscription
-    create_or_update_subscription(db, telegram_user_id=user_id, status="active", current_period_end=datetime.now(timezone.utc) + timedelta(days=30))
+    create_or_update_subscription(
+        db, telegram_user_id=user_id, status="active",
+        current_period_end=datetime.now(timezone.utc) + timedelta(days=30),
+        provider_subscription_id="2001",
+    )
 
     # Need a session for memory records to refer to
     tsession = TelegramSession(telegram_user_id=user_id, chat_id=chat_id)
@@ -70,7 +75,8 @@ async def test_cancellation_preserves_memory_records(db: Session, clear_billing_
             "text": "/cancel"
         }
     }
-    response = await handle_session_entry(db, cancel_update)
+    with patch("app.billing.apipay_client.ApiPayClient.cancel_subscription", return_value=True):
+        response = await handle_session_entry(db, cancel_update)
     assert response.status == "ok"
     assert "сохраняются" in response.messages[0].text
 

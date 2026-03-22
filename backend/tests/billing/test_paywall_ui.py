@@ -35,11 +35,11 @@ def test_build_paywall_response_ui():
     assert isinstance(text, str)
     assert isinstance(keyboard, list)
     
-    # AC2: Contains 'Оформить premium' button with 'pay:stars'
+    # AC2: Contains Kaspi payment button with 'pay:kaspi'
     found_button = False
     for row in keyboard:
         for button in row:
-            if "Оформить Premium" in button.text and button.callback_data == "pay:stars":
+            if button.callback_data == "pay:kaspi":
                 found_button = True
     assert found_button, "Paywall must contain payment button"
 
@@ -66,7 +66,7 @@ async def test_paywall_gate_ui_integration(db: Session):
         assert resp.action == "paywall_gate"
         assert "paywall_shown" in resp.signals
         assert resp.inline_keyboard is not None
-        assert any("pay:stars" == btn.callback_data for row in resp.inline_keyboard for btn in row)
+        assert any("pay:kaspi" == btn.callback_data for row in resp.inline_keyboard for btn in row)
         # Note: In the actual code, the billing gate is BEFORE safety assessment.
         # But we mock it anyway to be safe and avoid adaptation errors if it were called.
 

@@ -13,9 +13,6 @@ from sqlmodel import Session, select
 
 from app.billing.prompts import (
     CANCEL_ERROR_MESSAGE,
-    INVOICE_DESCRIPTION,
-    INVOICE_TITLE,
-    PAYMENT_CONFIRMATION_ERROR_MESSAGE,
     PAYMENT_INITIATION_ERROR_MESSAGE,
     PAYMENT_SUCCESS_MESSAGE,
     STATUS_ERROR_MESSAGE,
@@ -23,8 +20,6 @@ from app.billing.prompts import (
 from app.billing.service import (
     build_paywall_response,
     build_status_response,
-    confirm_payment_and_upgrade,
-    get_or_create_purchase_intent,
     get_user_access_state,
     has_premium_access,
     initiate_kaspi_payment,
@@ -149,15 +144,6 @@ class ReplyKeyboardMarkup(BaseModel):
     one_time_keyboard: bool = True
 
 
-class InvoiceData(BaseModel):
-    title: str
-    description: str
-    payload: str
-    currency: str
-    prices: list[dict[str, Any]]
-    chat_id: int
-
-
 class TelegramWebhookResponse(BaseModel):
     status: str
     action: str
@@ -167,8 +153,6 @@ class TelegramWebhookResponse(BaseModel):
     messages: list[TelegramMessageOut] = Field(default_factory=list)
     inline_keyboard: list[list[InlineButton]] = Field(default_factory=list)
     reply_markup: ReplyKeyboardMarkup | None = None
-    invoice: InvoiceData | None = None
-    pre_checkout_query_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -225,18 +209,10 @@ async def handle_session_entry(
             )
     # --- END DEDUPLICATION GUARD ---
 
-    if "pre_checkout_query" in update:
-        return _handle_pre_checkout_query(update["pre_checkout_query"])
-
-    if "message" in update and "successful_payment" in update.get("message", {}):
-        return _handle_successful_payment(session, update["message"])
-
     if "callback_query" in update:
         cbq = update["callback_query"]
         if isinstance(cbq, dict):
             callback_data = cbq.get("data", "")
-            if callback_data == "pay:stars":
-                return _handle_payment_initiation(session, cbq)
             if callback_data == "pay:kaspi":
                 return _handle_kaspi_payment_initiation(session, cbq)
             if callback_data.startswith("admin:"):
@@ -338,88 +314,6 @@ def _handle_kaspi_payment_initiation(
                 [ReplyButton(text="📱 Отправить номер для Kaspi", request_contact=True)]
             ]
         )
-    )
-
-
-def _handle_payment_initiation(
-    session: Session, callback_query: dict[str, Any]
-) -> TelegramWebhookResponse:
-    from_field = callback_query.get("from")
-    message_field = callback_query.get("message")
-    if not isinstance(from_field, dict) or not isinstance(message_field, dict):
-        return TelegramWebhookResponse(status="error", action="payment_invoice_error", handled=False)
-
-    chat_field = message_field.get("chat")
-    if not isinstance(chat_field, dict):
-        return TelegramWebhookResponse(status="error", action="payment_invoice_error", handled=False)
-
-    telegram_user_id = from_field.get("id")
-    chat_id = chat_field.get("id")
-
-    if not isinstance(telegram_user_id, int) or not isinstance(chat_id, int):
-        return TelegramWebhookResponse(status="error", action="payment_invoice_error", handled=False)
-
-    try:
-        purchase_intent = get_or_create_purchase_intent(session, telegram_user_id)
-        session.commit()
-    except Exception:
-        logger.exception("Failed to create purchase intent for telegram_user_id=%s", telegram_user_id)
-        try:
-            session.rollback()
-            active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
-            session.flush()
-            record_retryable_signal(
-                session,
-                session_id=active_session.id,
-                telegram_user_id=telegram_user_id,
-                signal_type="billing_invoice_creation_failed",
-                error_type="BillingInvoiceCreationError",
-                error_message="Failed to create purchase intent.",
-                suggested_action="review_billing_invoice_creation",
-                failure_stage="billing",
-            )
-            session.commit()
-        except Exception:
-            logger.exception(
-                "Failed to record billing_invoice_creation_failed signal for telegram_user_id=%s",
-                telegram_user_id,
-            )
-        return TelegramWebhookResponse(
-            status="error",
-            action="payment_invoice_error",
-            handled=True,
-            messages=[TelegramMessageOut(text=PAYMENT_INITIATION_ERROR_MESSAGE)],
-        )
-
-    invoice = InvoiceData(
-        title=INVOICE_TITLE,
-        description=INVOICE_DESCRIPTION,
-        payload=purchase_intent.invoice_payload,
-        currency="XTR",
-        prices=[{"label": "Premium", "amount": purchase_intent.amount}],
-        chat_id=chat_id,
-    )
-
-    return TelegramWebhookResponse(
-        status="ok",
-        action="payment_invoice",
-        handled=True,
-        signals=["send_invoice"],
-        invoice=invoice,
-    )
-
-
-def _handle_pre_checkout_query(query: dict[str, Any]) -> TelegramWebhookResponse:
-    pre_checkout_query_id = query.get("id")
-    if not isinstance(pre_checkout_query_id, str):
-        return TelegramWebhookResponse(status="error", action="pre_checkout_error", handled=False)
-
-    return TelegramWebhookResponse(
-        status="ok",
-        action="pre_checkout_ok",
-        handled=True,
-        signals=["answer_pre_checkout"],
-        pre_checkout_query_id=pre_checkout_query_id,
     )
 
 
@@ -777,99 +671,6 @@ def _handle_delete_command(
         action=action,
         handled=True,
         messages=[TelegramMessageOut(text=prompt)],
-    )
-
-
-def _handle_successful_payment(
-    session: Session, message: dict[str, Any]
-) -> TelegramWebhookResponse:
-
-    telegram_user_id = message.get("from", {}).get("id")
-    chat_id = message.get("chat", {}).get("id")
-    successful_payment = message.get("successful_payment", {})
-    invoice_payload = successful_payment.get("invoice_payload")
-    telegram_payment_charge_id = successful_payment.get("telegram_payment_charge_id")
-    total_amount = successful_payment.get("total_amount")
-
-    if (
-        not isinstance(telegram_user_id, int)
-        or not isinstance(chat_id, int)
-        or not isinstance(invoice_payload, str)
-        or not isinstance(telegram_payment_charge_id, str)
-    ):
-        return TelegramWebhookResponse(status="error", action="payment_confirmation_error", handled=False)
-
-    try:
-        result = confirm_payment_and_upgrade(
-            session,
-            invoice_payload=invoice_payload,
-            telegram_payment_charge_id=telegram_payment_charge_id,
-            telegram_user_id=telegram_user_id,
-        )
-        session.commit()
-    except Exception:
-        logger.exception(
-            "Payment confirmation failed for telegram_user_id=%s", telegram_user_id
-        )
-        session.rollback()
-        try:
-            active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
-            session.flush()
-            record_retryable_signal(
-                session,
-                session_id=active_session.id,
-                telegram_user_id=telegram_user_id,
-                signal_type="billing_payment_confirmation_failed",
-                error_type="BillingPaymentConfirmationError",
-                error_message="Payment confirmation and upgrade failed.",
-                suggested_action="review_billing_payment_confirmation_failure",
-                failure_stage="billing",
-            )
-            session.commit()
-        except Exception:
-            logger.exception(
-                "Failed to record billing_payment_confirmation_failed signal for telegram_user_id=%s",
-                telegram_user_id,
-            )
-
-        return TelegramWebhookResponse(
-            status="error",
-            action="payment_confirmation_error",
-            handled=True,
-            messages=[TelegramMessageOut(text=PAYMENT_CONFIRMATION_ERROR_MESSAGE)],
-        )
-
-    # Signal recording is now outside the primary try-except to prevent false-positive error messages
-    # after a successful commit.
-    if result.signals:
-        try:
-            active_session = _get_or_create_active_session(session, telegram_user_id, chat_id)
-            session.flush()
-            for signal in result.signals:
-                record_retryable_signal(
-                    session,
-                    session_id=active_session.id,
-                    telegram_user_id=telegram_user_id,
-                    signal_type=signal,
-                    error_type="BillingSignalError",
-                    error_message=f"Signal {signal} during payment confirmation. Total amount: {total_amount}",
-                    suggested_action="review_payment_confirmation",
-                    failure_stage="billing",
-                )
-            session.commit()
-        except Exception:
-            logger.exception(
-                "Failed to record secondary signals for telegram_user_id=%s",
-                telegram_user_id,
-            )
-            # Do NOT return error here - the payment WAS successful and committed.
-
-    return TelegramWebhookResponse(
-        status="ok",
-        action="payment_confirmed",
-        handled=True,
-        messages=[TelegramMessageOut(text=PAYMENT_SUCCESS_MESSAGE)],
-        signals=["payment_confirmed"],
     )
 
 

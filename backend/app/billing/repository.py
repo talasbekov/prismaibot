@@ -109,8 +109,8 @@ def create_purchase_intent(
     telegram_user_id: int,
     invoice_payload: str,
     amount: int,
-    currency: str = "XTR",
-    provider_type: str = "telegram_stars",
+    currency: str = "KZT",
+    provider_type: str = "apipay",
     provider_invoice_id: str | None = None,
     phone_number: str | None = None,
 ) -> PurchaseIntent:
@@ -193,7 +193,7 @@ def create_or_update_subscription(
     status: str,
     current_period_end: datetime,
     cancel_at_period_end: bool = False,
-    provider_type: str = "telegram_stars",
+    provider_type: str = "apipay",
     provider_subscription_id: str | None = None,
 ) -> Subscription:
     subscription = get_subscription(session, telegram_user_id)

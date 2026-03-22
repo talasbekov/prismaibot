@@ -33,17 +33,7 @@ def _deliver_telegram_response(chat_id: int, response: TelegramWebhookResponse) 
             except Exception:
                 logger.exception("Failed to send typing chat action to chat_id=%s", chat_id)
 
-        # 2. Handle pre_checkout_query answer
-        if "answer_pre_checkout" in response.signals and response.pre_checkout_query_id:
-            try:
-                client.post(
-                    f"{base_url}/answerPreCheckoutQuery",
-                    json={"pre_checkout_query_id": response.pre_checkout_query_id, "ok": True}
-                )
-            except Exception:
-                logger.exception("Failed to answer pre_checkout_query_id=%s", response.pre_checkout_query_id)
-
-        # 3. Deliver text messages
+        # 2. Deliver text messages
         for idx, message in enumerate(response.messages):
             if idx > 0:
                 time.sleep(0.5)
@@ -72,23 +62,6 @@ def _deliver_telegram_response(chat_id: int, response: TelegramWebhookResponse) 
             except Exception:
                 logger.exception("Failed to deliver message to chat_id=%s: %s", chat_id, message.text[:50])
 
-        # 4. Deliver invoice if present
-        if response.invoice:
-            inv = response.invoice
-            invoice_payload = {
-                "chat_id": inv.chat_id,
-                "title": inv.title,
-                "description": inv.description,
-                "payload": inv.payload,
-                "currency": inv.currency,
-                "prices": inv.prices,
-            }
-            try:
-                res = client.post(f"{base_url}/sendInvoice", json=invoice_payload)
-                res.raise_for_status()
-            except Exception:
-                logger.exception("Failed to deliver invoice to chat_id=%s", inv.chat_id)
-
 
 @router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
@@ -105,8 +78,6 @@ async def telegram_webhook(
         chat_id = update["message"].get("chat", {}).get("id")
     elif "callback_query" in update:
         chat_id = update["callback_query"].get("message", {}).get("chat", {}).get("id")
-    elif "pre_checkout_query" in update:
-        chat_id = update["pre_checkout_query"].get("from", {}).get("id")
 
     if chat_id and response.handled:
         background_tasks.add_task(_deliver_telegram_response, chat_id, response)

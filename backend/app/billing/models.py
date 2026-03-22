@@ -57,12 +57,12 @@ class PurchaseIntent(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     telegram_user_id: int = Field(index=True, sa_type=BigInteger())  # type: ignore[call-overload]
-    provider_type: str = Field(default="telegram_stars", max_length=32)
+    provider_type: str = Field(default="apipay", max_length=32)
     provider_invoice_id: str | None = Field(default=None, index=True)
     phone_number: str | None = Field(default=None, max_length=32)
     invoice_payload: str = Field()
     amount: int
-    currency: str = Field(default="XTR", max_length=16)
+    currency: str = Field(default="KZT", max_length=16)
     status: str = Field(default="pending", max_length=32)
     provider_payment_charge_id: str | None = Field(default=None)
     created_at: datetime | None = Field(
@@ -83,7 +83,7 @@ class Subscription(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     telegram_user_id: int = Field(index=True, sa_type=BigInteger())  # type: ignore[call-overload]
-    provider_type: str = Field(default="telegram_stars", max_length=32)
+    provider_type: str = Field(default="apipay", max_length=32)
     provider_subscription_id: str | None = Field(default=None, index=True)
     status: str = Field(default="active", max_length=32)  # active, past_due, suspended, cancelled
     current_period_end: datetime = Field(

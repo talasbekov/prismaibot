@@ -18,6 +18,7 @@ from app.models import SummaryGenerationSignal
 def clear_billing_tables(db: Session):
     db.rollback()
     db.exec(text("DELETE FROM user_access_states"))
+    db.exec(text("DELETE FROM subscriptions"))
     db.exec(text("DELETE FROM purchase_intents"))
     db.exec(text("DELETE FROM free_session_events"))
     db.exec(text("DELETE FROM summary_generation_signal"))
@@ -36,9 +37,12 @@ async def test_cancel_command_premium_user(db: Session, clear_billing_tables):
     # Setup premium user with subscription
     user_id = 12345
     chat_id = 67890
-    
+
     end_date = datetime.now(timezone.utc) + timedelta(days=20)
-    create_or_update_subscription(db, telegram_user_id=user_id, status="active", current_period_end=end_date)
+    create_or_update_subscription(
+        db, telegram_user_id=user_id, status="active",
+        current_period_end=end_date, provider_subscription_id="1001",
+    )
     state = UserAccessState(telegram_user_id=user_id, access_tier="premium")
     db.add(state)
     db.commit()
@@ -51,7 +55,8 @@ async def test_cancel_command_premium_user(db: Session, clear_billing_tables):
         }
     }
 
-    response = await handle_session_entry(db, update)
+    with patch("app.billing.apipay_client.ApiPayClient.cancel_subscription", return_value=True):
+        response = await handle_session_entry(db, update)
 
     assert response.status == "ok"
     assert response.action == "cancellation_accepted"
@@ -76,14 +81,18 @@ async def test_cancel_command_with_subscription(db: Session, clear_billing_table
     
     # 1. Create active subscription
     end_date = datetime.now(timezone.utc) + timedelta(days=20)
-    create_or_update_subscription(db, telegram_user_id=user_id, status="active", current_period_end=end_date)
+    create_or_update_subscription(
+        db, telegram_user_id=user_id, status="active",
+        current_period_end=end_date, provider_subscription_id="1002",
+    )
     state = UserAccessState(telegram_user_id=user_id, access_tier="premium")
     db.add(state)
     db.commit()
 
     # 2. Cancel
     update = {"message": {"from": {"id": user_id}, "chat": {"id": chat_id}, "text": "/cancel"}}
-    response = await handle_session_entry(db, update)
+    with patch("app.billing.apipay_client.ApiPayClient.cancel_subscription", return_value=True):
+        response = await handle_session_entry(db, update)
 
     assert response.action == "cancellation_accepted"
     
