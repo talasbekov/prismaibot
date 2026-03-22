@@ -45,24 +45,24 @@ async def process_apipay_webhook(
     if event == "invoice.status_changed":
         provider_invoice_id = str(invoice_data.get("id"))
         status = invoice_data.get("status")
-        
+
         if status == "paid":
             # 1. Find intent
             intent = repository.get_purchase_intent_by_provider_invoice_id(session, provider_invoice_id)
             if not intent:
                 logger.warning("PurchaseIntent not found for provider_invoice_id=%s", provider_invoice_id)
                 return {"status": "error", "message": "intent_not_found"}
-            
+
             if intent.status == "completed":
                 return {"status": "ok", "message": "already_processed"}
-                
+
             # 2. Complete intent
             repository.complete_purchase_intent(session, intent, f"apipay_{provider_invoice_id}")
-            
+
             # 3. Upgrade user access
             state = repository.get_or_create_user_access_state(session, intent.telegram_user_id)
             repository.upgrade_access_tier(session, state, "premium")
-            
+
             # 4. Create/Update subscription
             from datetime import timedelta
             current_period_end = datetime.now(timezone.utc) + timedelta(days=30)
@@ -74,12 +74,23 @@ async def process_apipay_webhook(
                 provider_type="apipay",
             )
             session.commit()
-            
+
             # 5. Notify user
             from app.billing.prompts import PAYMENT_SUCCESS_MESSAGE
             await send_telegram_message(intent.telegram_user_id, PAYMENT_SUCCESS_MESSAGE)
-            
+
             return {"status": "ok", "message": "payment_confirmed"}
+
+    if event == "invoice.refunded":
+        refund_data = payload.get("refund", {})
+        invoice_data_refund = payload.get("invoice", {})
+        logger.info(
+            "invoice.refunded received: refund_id=%s invoice_id=%s amount=%s — no action taken",
+            refund_data.get("id"),
+            invoice_data_refund.get("id"),
+            refund_data.get("amount"),
+        )
+        return {"status": "ok", "message": "refund_logged"}
 
     if event == "subscription.payment_succeeded":
         provider_sub_id = str(subscription_data.get("id"))
@@ -112,25 +123,6 @@ async def process_apipay_webhook(
         logger.info("Payment failed for subscription provider_sub_id=%s, ApiPay will retry", provider_sub_id)
         await send_telegram_message(sub.telegram_user_id, PAYMENT_RETRY_MESSAGE)
         return {"status": "ok", "message": "payment_failed_notified"}
-
-    if event == "subscription.grace_period_started":
-        provider_sub_id = str(subscription_data.get("id"))
-        sub = repository.get_subscription_by_provider_id(session, provider_sub_id)
-        if not sub:
-            logger.warning("Subscription not found for provider_sub_id=%s", provider_sub_id)
-            return {"status": "error", "message": "subscription_not_found"}
-
-        expires_at_str = payload.get("expires_at")
-        if expires_at_str:
-            sub.current_period_end = datetime.fromisoformat(expires_at_str)
-        sub.status = "past_due"
-        sub.updated_at = datetime.now(timezone.utc)
-        session.add(sub)
-        session.commit()
-
-        remaining_hours = max(0, int((sub.current_period_end - datetime.now(timezone.utc)).total_seconds() // 3600))
-        await send_telegram_message(sub.telegram_user_id, STATUS_SUBSCRIPTION_PAST_DUE_MESSAGE.format(hours=remaining_hours))
-        return {"status": "ok", "message": "grace_period_started"}
 
     if event == "subscription.expired":
         provider_sub_id = str(subscription_data.get("id"))
@@ -376,7 +368,7 @@ def build_status_response(
         if subscription.status == "past_due":
             from datetime import timedelta
 
-            grace_end = subscription.current_period_end
+            grace_end = subscription.current_period_end + timedelta(hours=24)
             remaining_hours = int(
                 (grace_end - datetime.now(timezone.utc)).total_seconds() // 3600
             )
