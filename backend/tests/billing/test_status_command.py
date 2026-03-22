@@ -33,35 +33,34 @@ async def test_status_command_subscription_past_due(db: Session) -> None:
     from datetime import datetime, timedelta, timezone
     from app.billing.repository import create_or_update_subscription
     user_id = 9911
-    # Expired 1 hour ago
-    end_date = datetime.now(timezone.utc) - timedelta(hours=1)
-    create_or_update_subscription(db, telegram_user_id=user_id, status="active", current_period_end=end_date)
+    # Simulate what grace_period_started webhook would set:
+    # current_period_end = grace period end (23 hours from now)
+    grace_end = datetime.now(timezone.utc) + timedelta(hours=23)
+    create_or_update_subscription(db, telegram_user_id=user_id, status="past_due", current_period_end=grace_end)
     db.commit()
 
     update = {"message": {"from": {"id": user_id}, "chat": {"id": user_id}, "text": "/status"}}
     resp = await handle_session_entry(db, update)
-    
-    # 24h grace period - 1h since expiry = ~23h remaining
+
     assert "Льготный период" in resp.messages[0].text
     import re
     assert re.search(r"\d+ ч\.", resp.messages[0].text)
-    assert resp.inline_keyboard[0][0].callback_data == "pay:stars"
+    assert resp.inline_keyboard[0][0].callback_data == "pay:kaspi"
 
 @pytest.mark.anyio
 async def test_status_command_subscription_suspended(db: Session) -> None:
     from datetime import datetime, timedelta, timezone
     from app.billing.repository import create_or_update_subscription
     user_id = 9912
-    # Expired 25 hours ago
-    end_date = datetime.now(timezone.utc) - timedelta(hours=25)
-    create_or_update_subscription(db, telegram_user_id=user_id, status="active", current_period_end=end_date)
+    create_or_update_subscription(db, telegram_user_id=user_id, status="suspended",
+        current_period_end=datetime.now(timezone.utc) - timedelta(days=1))
     db.commit()
 
     update = {"message": {"from": {"id": user_id}, "chat": {"id": user_id}, "text": "/status"}}
     resp = await handle_session_entry(db, update)
-    
+
     assert resp.messages[0].text == STATUS_SUBSCRIPTION_SUSPENDED_MESSAGE
-    assert resp.inline_keyboard[0][0].callback_data == "pay:stars"
+    assert resp.inline_keyboard[0][0].callback_data == "pay:kaspi"
 
 
 from app.billing.repository import get_or_create_user_access_state
@@ -142,8 +141,8 @@ async def test_status_command_free_threshold_reached(db: Session) -> None:
     assert resp.action == "status_shown"
     assert resp.messages[0].text == STATUS_FREE_THRESHOLD_REACHED_MESSAGE
     assert len(resp.inline_keyboard) == 1
-    assert resp.inline_keyboard[0][0].callback_data == "pay:stars"
-    assert "Оформить Premium" in resp.inline_keyboard[0][0].text
+    assert resp.inline_keyboard[0][0].callback_data == "pay:kaspi"
+    assert "Kaspi" in resp.inline_keyboard[0][0].text
 
 
 @pytest.mark.anyio
