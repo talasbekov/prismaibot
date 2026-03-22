@@ -77,8 +77,6 @@ class Settings(BaseSettings):
     MEMORY_MAX_RETRY_ATTEMPTS: int = 3
     # Number of completed reflective sessions a user may have before the premium boundary is considered.
     FREE_SESSION_THRESHOLD: int = 1
-    # Price in Telegram Stars for premium access.
-    PREMIUM_STARS_PRICE: int = 1
     # Price in KZT for Kaspi payments
     PREMIUM_KZT_PRICE: int = 3000
     # Interval in days for periodic reflective insight generation.
@@ -194,6 +192,7 @@ class Settings(BaseSettings):
             "PAYMENT_PROVIDER_WEBHOOK_SECRET",
             self.PAYMENT_PROVIDER_WEBHOOK_SECRET,
         )
+        self._require_non_local_setting("APIPAY_WEBHOOK_SECRET", self.APIPAY_WEBHOOK_SECRET)
         return self
 
 
