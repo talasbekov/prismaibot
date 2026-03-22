@@ -1,90 +1,103 @@
 import pytest
 from datetime import datetime, timedelta, timezone
-from sqlmodel import Session, select
+from sqlmodel import Session
 from app.billing import repository, service
-from app.billing.models import Subscription, UserAccessState
-from unittest.mock import patch
+from app.billing.models import Subscription
 
-def test_create_subscription_on_payment(db: Session):
+
+def test_create_subscription_direct(db: Session):
     user_id = 44444
-    service.confirm_payment_and_upgrade(
+    current_period_end = datetime.now(timezone.utc) + timedelta(days=30)
+    repository.create_or_update_subscription(
         db,
-        invoice_payload="test_payload",
-        telegram_payment_charge_id="charge_123",
-        telegram_user_id=user_id
+        telegram_user_id=user_id,
+        status="active",
+        current_period_end=current_period_end,
+        provider_type="apipay",
     )
     db.commit()
-    
+
     sub = repository.get_subscription(db, user_id)
     assert sub is not None
     assert sub.status == "active"
-    # expires in ~30 days
     assert sub.current_period_end > datetime.now(timezone.utc) + timedelta(days=29)
 
-def test_grace_period_access(db: Session):
+
+def test_check_subscription_status_read_only(db: Session):
+    """check_and_update_subscription_status must NOT mutate status, even if period has expired."""
     user_id = 55555
-    # Create an expired subscription (just-now expired)
     expired_time = datetime.now(timezone.utc) - timedelta(minutes=1)
     repository.create_or_update_subscription(
         db,
         telegram_user_id=user_id,
         status="active",
-        current_period_end=expired_time
+        current_period_end=expired_time,
     )
     db.commit()
-    
-    # Check status - should move to past_due
+
     sub = service.check_and_update_subscription_status(db, user_id)
-    assert sub.status == "past_due"
-    
-    # Should still have premium access during grace period
+    # Status must remain "active" — no automatic transition
+    assert sub.status == "active"
+    # No flush/commit should have happened
+    db.expire_all()
+    sub_reloaded = repository.get_subscription(db, user_id)
+    assert sub_reloaded.status == "active"
+
+
+def test_has_premium_access_past_due_subscription(db: Session):
+    """past_due subscription (set by webhook) still grants premium access."""
+    user_id = 55556
+    # Simulate what grace_period_started webhook would set
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=12)
+    repository.create_or_update_subscription(
+        db,
+        telegram_user_id=user_id,
+        status="past_due",
+        current_period_end=expires_at,
+    )
+    db.commit()
+
     assert service.has_premium_access(db, user_id) is True
 
-def test_suspended_access_after_grace_period(db: Session):
+
+def test_has_premium_access_suspended_subscription(db: Session):
+    """suspended subscription (set by subscription.expired webhook) revokes access."""
     user_id = 66666
-    # Create subscription that expired > 24h ago
-    expired_time = datetime.now(timezone.utc) - timedelta(hours=25)
+    repository.create_or_update_subscription(
+        db,
+        telegram_user_id=user_id,
+        status="suspended",
+        current_period_end=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    db.commit()
+
+    assert service.has_premium_access(db, user_id) is False
+
+
+def test_idempotent_subscription_update(db: Session):
+    user_id = 77777
+    end1 = datetime.now(timezone.utc) + timedelta(days=30)
     repository.create_or_update_subscription(
         db,
         telegram_user_id=user_id,
         status="active",
-        current_period_end=expired_time
-    )
-    db.commit()
-    
-    # Check status - should move to suspended
-    sub = service.check_and_update_subscription_status(db, user_id)
-    assert sub.status == "suspended"
-    
-    # Should NOT have premium access
-    assert service.has_premium_access(db, user_id) is False
-    
-    # UserAccessState should be downgraded to free
-    state = repository.get_or_create_user_access_state(db, user_id)
-    assert state.access_tier == "free"
-
-def test_idempotent_subscription_update(db: Session):
-    user_id = 77777
-    # First payment
-    service.confirm_payment_and_upgrade(
-        db,
-        invoice_payload="p1",
-        telegram_payment_charge_id="c1",
-        telegram_user_id=user_id
+        current_period_end=end1,
+        provider_type="apipay",
     )
     db.commit()
     sub1 = repository.get_subscription(db, user_id)
     first_end = sub1.current_period_end
-    
-    # Second payment (manual or renewal)
-    service.confirm_payment_and_upgrade(
+
+    end2 = datetime.now(timezone.utc) + timedelta(days=60)
+    repository.create_or_update_subscription(
         db,
-        invoice_payload="p2",
-        telegram_payment_charge_id="c2",
-        telegram_user_id=user_id
+        telegram_user_id=user_id,
+        status="active",
+        current_period_end=end2,
+        provider_type="apipay",
     )
     db.commit()
     sub2 = repository.get_subscription(db, user_id)
-    
+
     assert sub2.status == "active"
     assert sub2.current_period_end > first_end

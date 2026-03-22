@@ -398,38 +398,8 @@ def build_status_response(
 def check_and_update_subscription_status(
     session: Session, telegram_user_id: int
 ) -> Subscription | None:
-    """Check subscription expiration and update status (active -> past_due -> suspended)."""
-    subscription = repository.get_subscription(session, telegram_user_id)
-    if not subscription:
-        return None
-
-    now = datetime.now(timezone.utc)
-
-    if subscription.status == "active":
-        if now > subscription.current_period_end:
-            # Move to Grace Period (past_due)
-            subscription.status = "past_due"
-            # Updated_at is handled in repository or manually
-            subscription.updated_at = now
-            session.add(subscription)
-            session.flush()
-
-    if subscription.status == "past_due":
-        # Grace period is 24 hours
-        from datetime import timedelta
-        grace_end = subscription.current_period_end + timedelta(hours=24)
-        if now > grace_end:
-            # Grace period expired -> Suspended
-            subscription.status = "suspended"
-            subscription.updated_at = now
-            session.add(subscription)
-            session.flush()
-
-            # Also downgrade access tier in UserAccessState if needed
-            state = repository.get_or_create_user_access_state(session, telegram_user_id)
-            repository.upgrade_access_tier(session, state, "free")
-
-    return subscription
+    """Return current subscription. Read-only — status transitions happen via ApiPay webhooks."""
+    return repository.get_subscription(session, telegram_user_id)
 
 
 def has_premium_access(session: Session, telegram_user_id: int) -> bool:
