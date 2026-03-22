@@ -76,11 +76,13 @@ async def test_webhook_subscription_payment_failed(db: Session):
     
     with patch("app.billing.service.send_telegram_message", new_callable=AsyncMock) as mock_send:
         await service.process_apipay_webhook(db, payload)
-        
+
         db.expire_all()
         sub = repository.get_subscription(db, user_id)
-        assert sub.status == "past_due"
-        mock_send.assert_called_once()
+        # payment_failed should NOT mutate status — ApiPay will retry automatically
+        assert sub.status == "active"
+        from app.billing.prompts import PAYMENT_RETRY_MESSAGE
+        mock_send.assert_called_once_with(user_id, PAYMENT_RETRY_MESSAGE)
 
 @pytest.mark.anyio
 async def test_cancel_apipay_subscription(db: Session):

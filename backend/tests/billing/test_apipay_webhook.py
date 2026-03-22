@@ -88,14 +88,64 @@ def test_apipay_webhook_intent_not_found(webhook_secret):
         }
     }
     body = json.dumps(payload).encode()
-    
+
     with patch("app.billing.api.verify_apipay_signature", return_value=True):
         response = client.post(
             f"{settings.API_V1_STR}/billing/apipay/webhook",
             content=body,
             headers={"X-Webhook-Signature": "sha256=dummy"}
         )
-        
+
         assert response.status_code == 200
         assert response.json()["status"] == "error"
         assert response.json()["message"] == "intent_not_found"
+
+
+@pytest.mark.anyio
+async def test_apipay_webhook_subscription_payment_failed_no_status_change(db: Session):
+    """payment_failed should NOT set past_due — just log and notify with retry message."""
+    from app.billing.repository import create_or_update_subscription
+    from datetime import datetime, timedelta, timezone
+
+    user_id = 80010
+    provider_sub_id = "999"
+    end = datetime.now(timezone.utc) + timedelta(days=10)
+    create_or_update_subscription(
+        db,
+        telegram_user_id=user_id,
+        status="active",
+        current_period_end=end,
+        provider_type="apipay",
+        provider_subscription_id=provider_sub_id,
+    )
+    db.commit()
+
+    payload = {
+        "event": "subscription.payment_failed",
+        "subscription": {"id": 999},
+    }
+    body = json.dumps(payload).encode()
+
+    with (
+        patch("app.billing.api.verify_apipay_signature", return_value=True),
+        patch("app.billing.service.send_telegram_message", new_callable=AsyncMock) as mock_send,
+    ):
+        response = client.post(
+            f"{settings.API_V1_STR}/billing/apipay/webhook",
+            content=body,
+            headers={"X-Webhook-Signature": "sha256=dummy"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+    # Status must remain "active" — no state mutation
+    db.expire_all()
+    from sqlmodel import select
+    from app.billing.models import Subscription
+    sub = db.exec(select(Subscription).where(Subscription.telegram_user_id == user_id)).one()
+    assert sub.status == "active"
+
+    # User must be notified with retry message
+    from app.billing.prompts import PAYMENT_RETRY_MESSAGE
+    mock_send.assert_called_once_with(user_id, PAYMENT_RETRY_MESSAGE)

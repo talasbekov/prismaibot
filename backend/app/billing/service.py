@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, Any
 from sqlmodel import Session
 
 from app.billing import repository
-from app.billing.models import PurchaseIntent, Subscription, UserAccessState
+from app.billing.models import Subscription, UserAccessState
 from app.billing.prompts import (
     CANCEL_NO_ACTIVE_SUBSCRIPTION_MESSAGE,
     CANCEL_PREMIUM_SUCCESS_MESSAGE,
+    PAYMENT_RETRY_MESSAGE,
     PAYWALL_MESSAGE,
     STATUS_FREE_ACTIVE_MESSAGE,
     STATUS_FREE_THRESHOLD_REACHED_MESSAGE,
@@ -107,17 +108,10 @@ async def process_apipay_webhook(
         if not sub:
             logger.warning("Subscription not found for provider_sub_id=%s", provider_sub_id)
             return {"status": "error", "message": "subscription_not_found"}
-            
-        sub.status = "past_due"
-        sub.updated_at = datetime.now(timezone.utc)
-        session.add(sub)
-        session.commit()
-        
-        # Notify user about grace period
-        from app.billing.prompts import STATUS_SUBSCRIPTION_PAST_DUE_MESSAGE
-        msg = STATUS_SUBSCRIPTION_PAST_DUE_MESSAGE.format(hours=24)
-        await send_telegram_message(sub.telegram_user_id, msg)
-        return {"status": "ok", "message": "subscription_past_due"}
+
+        logger.info("Payment failed for subscription provider_sub_id=%s, ApiPay will retry", provider_sub_id)
+        await send_telegram_message(sub.telegram_user_id, PAYMENT_RETRY_MESSAGE)
+        return {"status": "ok", "message": "payment_failed_notified"}
 
     if event == "subscription.expired":
         provider_sub_id = str(subscription_data.get("id"))
@@ -297,36 +291,9 @@ def build_paywall_response(
     from app.conversation.session_bootstrap import InlineButton
 
     buttons = [
-        [InlineButton(text="Оформить Premium ✦", callback_data="pay:stars")],
         [InlineButton(text="Оплатить через Kaspi 🇰🇿", callback_data="pay:kaspi")],
     ]
     return PAYWALL_MESSAGE, buttons
-
-
-def get_or_create_purchase_intent(
-    session: Session,
-    telegram_user_id: int,
-) -> PurchaseIntent:
-    intent = repository.get_pending_purchase_intent(session, telegram_user_id)
-    if intent is not None:
-        return intent
-
-    intent_id = uuid.uuid4()
-    return repository.create_purchase_intent(
-        session,
-        id=intent_id,
-        telegram_user_id=telegram_user_id,
-        invoice_payload=f"premium_{intent_id}",
-        amount=settings.PREMIUM_STARS_PRICE,
-        currency="XTR",
-    )
-
-
-@dataclass
-class PaymentConfirmationResult:
-    success: bool
-    already_completed: bool
-    signals: list[str]
 
 
 @dataclass
@@ -373,63 +340,6 @@ async def process_cancellation_request(
     )
 
 
-def confirm_payment_and_upgrade(
-    session: Session,
-    *,
-    invoice_payload: str,
-    telegram_payment_charge_id: str,
-    telegram_user_id: int,
-) -> PaymentConfirmationResult:
-    state = repository.get_or_create_user_access_state(session, telegram_user_id)
-    intent = repository.get_purchase_intent_by_payload(session, invoice_payload)
-
-    if intent is not None:
-        if intent.status == "pending":
-            repository.complete_purchase_intent(session, intent, telegram_payment_charge_id)
-            repository.upgrade_access_tier(session, state, "premium")
-            
-            from datetime import timedelta
-            current_period_end = datetime.now(timezone.utc) + timedelta(days=30)
-            repository.create_or_update_subscription(
-                session,
-                telegram_user_id=telegram_user_id,
-                status="active",
-                current_period_end=current_period_end,
-            )
-            
-            return PaymentConfirmationResult(success=True, already_completed=False, signals=[])
-        elif intent.status == "completed":
-            if state.access_tier != "premium":
-                repository.upgrade_access_tier(session, state, "premium")
-            return PaymentConfirmationResult(success=True, already_completed=True, signals=[])
-        elif intent.status == "failed":
-            repository.upgrade_access_tier(session, state, "premium")
-            return PaymentConfirmationResult(
-                success=True,
-                already_completed=False,
-                signals=["billing_payment_intent_in_failed_status"],
-            )
-
-    # Orphan payment fallback
-    repository.upgrade_access_tier(session, state, "premium")
-
-    from datetime import timedelta
-    current_period_end = datetime.now(timezone.utc) + timedelta(days=30)
-    repository.create_or_update_subscription(
-        session,
-        telegram_user_id=telegram_user_id,
-        status="active",
-        current_period_end=current_period_end,
-    )
-
-    return PaymentConfirmationResult(
-        success=True,
-        already_completed=False,
-        signals=["billing_payment_intent_not_found"],
-    )
-
-
-
 def build_status_response(
     session: Session,
     telegram_user_id: int,
@@ -453,12 +363,12 @@ def build_status_response(
             )
             remaining_hours = max(0, remaining_hours)
             return STATUS_SUBSCRIPTION_PAST_DUE_MESSAGE.format(hours=remaining_hours), [
-                [InlineButton(text="Обновить оплату ✦", callback_data="pay:stars")]
+                [InlineButton(text="Оплатить через Kaspi 🇰🇿", callback_data="pay:kaspi")]
             ]
 
         if subscription.status == "suspended":
             return STATUS_SUBSCRIPTION_SUSPENDED_MESSAGE, [
-                [InlineButton(text="Оформить Premium ✦", callback_data="pay:stars")]
+                [InlineButton(text="Оплатить через Kaspi 🇰🇿", callback_data="pay:kaspi")]
             ]
 
     if user_access_state.access_tier == "premium":
@@ -470,7 +380,7 @@ def build_status_response(
     # Free tier, threshold reached
     return (
         STATUS_FREE_THRESHOLD_REACHED_MESSAGE,
-        [[InlineButton(text="Оформить Premium ✦", callback_data="pay:stars")]],
+        [[InlineButton(text="Оплатить через Kaspi 🇰🇿", callback_data="pay:kaspi")]],
     )
 
 
