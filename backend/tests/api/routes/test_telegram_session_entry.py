@@ -74,6 +74,32 @@ def test_start_autostarts_brainstorming_with_typing_signal(
     assert payload["inline_keyboard"] == []
 
 
+def test_start_includes_reply_keyboard_with_help_and_reset(
+    client: TestClient, db: Session
+) -> None:
+    response = client.post(
+        "/api/v1/telegram/webhook",
+        json={
+            "message": {
+                "message_id": 1,
+                "text": "/start",
+                "chat": {"id": 2001, "type": "private"},
+                "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+            }
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "ok"
+    markup = payload["reply_markup"]
+    assert markup is not None
+    assert markup["resize_keyboard"] is True
+    assert markup["one_time_keyboard"] is False
+    button_texts = [btn["text"] for btn in markup["keyboard"][0]]
+    assert "❓ Помощь" in button_texts
+    assert "🔄 Начать заново" in button_texts
+
+
 def test_first_message_creates_session_tied_to_telegram_user_id(
     client: TestClient, db: Session
 ) -> None:
