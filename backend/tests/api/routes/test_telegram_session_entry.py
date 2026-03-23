@@ -2213,7 +2213,7 @@ def test_help_button_returns_phase_guide_without_resetting_session(
     assert payload["status"] == "ok"
     assert payload["action"] == "help_shown"
     assert len(payload["messages"]) == 1
-    assert "Как работает мозговой штурм" in payload["messages"][0]["text"]
+    assert "Как проходит разбор в Prism AI" in payload["messages"][0]["text"]
 
     db.refresh(session_row)
     assert session_row.brainstorm_phase == phase_before
