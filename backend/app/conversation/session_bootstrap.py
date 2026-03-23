@@ -261,6 +261,22 @@ async def handle_session_entry(
             chat_id=message.chat_id,
         )
 
+    if message.text.strip() == _HELP_BUTTON_TEXT:
+        return TelegramWebhookResponse(
+            status="ok",
+            action="help_shown",
+            handled=True,
+            messages=[TelegramMessageOut(text=HELP_MESSAGE)],
+        )
+
+    if message.text.strip() == _RESET_BUTTON_TEXT:
+        return _start_brainstorming_session(
+            session=session,
+            telegram_user_id=message.telegram_user_id,
+            chat_id=message.chat_id,
+            action="brainstorm_reset",
+        )
+
     if message.text.strip() == "/status":
         return _handle_status_command(
             session, message.telegram_user_id, message.chat_id

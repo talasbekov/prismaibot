@@ -2160,3 +2160,117 @@ def test_sensitive_session_closure_keeps_standard_recall_conservative(
         db.exec(select(ProfileFact).where(ProfileFact.telegram_user_id == user_id)).all()
         == []
     )
+
+
+def test_help_button_returns_phase_guide_without_resetting_session(
+    client: TestClient, db: Session
+) -> None:
+    from unittest.mock import patch
+    # Start a session
+    client.post(
+        "/api/v1/telegram/webhook",
+        json={
+            "message": {
+                "message_id": 1,
+                "text": "/start",
+                "chat": {"id": 2001, "type": "private"},
+                "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+            }
+        },
+    )
+    # Advance to collect_goal by sending a topic
+    with patch("app.conversation.brainstorming.orchestrator._ask_openai", return_value="Какова цель?"):
+        client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "message": {
+                    "message_id": 2,
+                    "text": "Карьерный рост",
+                    "chat": {"id": 2001, "type": "private"},
+                    "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+                }
+            },
+        )
+
+    session_row = db.exec(
+        select(TelegramSession).where(TelegramSession.telegram_user_id == 1001)
+    ).one()
+    phase_before = session_row.brainstorm_phase
+
+    response = client.post(
+        "/api/v1/telegram/webhook",
+        json={
+            "message": {
+                "message_id": 3,
+                "text": "❓ Помощь",
+                "chat": {"id": 2001, "type": "private"},
+                "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+            }
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["action"] == "help_shown"
+    assert len(payload["messages"]) == 1
+    assert "Как работает мозговой штурм" in payload["messages"][0]["text"]
+
+    db.refresh(session_row)
+    assert session_row.brainstorm_phase == phase_before
+
+
+def test_reset_button_resets_session_like_start(
+    client: TestClient, db: Session
+) -> None:
+    from unittest.mock import patch
+    # Create and advance a session
+    client.post(
+        "/api/v1/telegram/webhook",
+        json={
+            "message": {
+                "message_id": 1,
+                "text": "/start",
+                "chat": {"id": 2001, "type": "private"},
+                "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+            }
+        },
+    )
+    with patch("app.conversation.brainstorming.orchestrator._ask_openai", return_value="Какова цель?"):
+        client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "message": {
+                    "message_id": 2,
+                    "text": "Карьерный рост",
+                    "chat": {"id": 2001, "type": "private"},
+                    "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+                }
+            },
+        )
+
+    response = client.post(
+        "/api/v1/telegram/webhook",
+        json={
+            "message": {
+                "message_id": 3,
+                "text": "🔄 Начать заново",
+                "chat": {"id": 2001, "type": "private"},
+                "from": {"id": 1001, "is_bot": False, "first_name": "Masha"},
+            }
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["action"] == "brainstorm_reset"
+    assert payload["messages"][0]["text"] == OPENING_PROMPT
+    markup = payload["reply_markup"]
+    assert markup is not None
+    button_texts = [btn["text"] for btn in markup["keyboard"][0]]
+    assert "🔄 Начать заново" in button_texts
+
+    session_row = db.exec(
+        select(TelegramSession).where(TelegramSession.telegram_user_id == 1001)
+    ).one()
+    assert session_row.brainstorm_phase == "collect_topic"
+    assert session_row.brainstorm_data["ideas"] == []
