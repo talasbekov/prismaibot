@@ -144,6 +144,27 @@ class ReplyKeyboardMarkup(BaseModel):
     one_time_keyboard: bool = True
 
 
+HELP_MESSAGE = (
+    "🧠 *Как работает мозговой штурм:*\n\n"
+    "1. *Тема* — ты называешь, над чем хочешь подумать\n"
+    "2. *Цель* — уточняем, чего ты хочешь достичь\n"
+    "3. *Ограничения* — что нельзя или важно учесть\n"
+    "4. *Идеи* — бот помогает генерировать идеи свободно\n"
+    "5. *Группировка* — похожие идеи объединяются в кластеры\n"
+    "6. *Приоритеты* — выбираем самые важные направления\n"
+    "7. *План действий* — конкретные шаги на основе лучших идей"
+)
+
+_HELP_BUTTON_TEXT = "❓ Помощь"
+_RESET_BUTTON_TEXT = "🔄 Начать заново"
+
+_PERSISTENT_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[[ReplyButton(text=_HELP_BUTTON_TEXT), ReplyButton(text=_RESET_BUTTON_TEXT)]],
+    resize_keyboard=True,
+    one_time_keyboard=False,
+)
+
+
 class TelegramWebhookResponse(BaseModel):
     status: str
     action: str
@@ -238,6 +259,22 @@ async def handle_session_entry(
             session=session,
             telegram_user_id=message.telegram_user_id,
             chat_id=message.chat_id,
+        )
+
+    if message.text.strip() == _HELP_BUTTON_TEXT:
+        return TelegramWebhookResponse(
+            status="ok",
+            action="help_shown",
+            handled=True,
+            messages=[TelegramMessageOut(text=HELP_MESSAGE)],
+        )
+
+    if message.text.strip() == _RESET_BUTTON_TEXT:
+        return _start_brainstorming_session(
+            session=session,
+            telegram_user_id=message.telegram_user_id,
+            chat_id=message.chat_id,
+            action="brainstorm_reset",
         )
 
     if message.text.strip() == "/status":
@@ -1436,12 +1473,14 @@ def _start_brainstorming_session(
         "facilitation_turns": 0,
     }
     _save_session(session, active_session)
-    return _build_response(
+    response = _build_response(
         action=action,
         session_record=active_session,
         message_texts=[OPENING_PROMPT, FALLBACKS["collect_topic"]],
         extra_signals=("typing",),
     )
+    response.reply_markup = _PERSISTENT_KEYBOARD
+    return response
 
 
 def _build_response(
