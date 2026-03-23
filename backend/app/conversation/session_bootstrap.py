@@ -1191,7 +1191,8 @@ def _update_brainstorm_context(working_context: str | None, data: dict | None) -
         return working_context or ""
     brainstorm_summary = "; ".join(parts)
     base = _strip_brainstorm_context_marker(working_context)
-    return f"{base}\n[Brainstorm: {brainstorm_summary}]".strip()
+    result = f"{base}\n[Brainstorm: {brainstorm_summary}]".strip()
+    return _trim_text(result) or result
 
 
 def _compose_crisis_routing_response(
